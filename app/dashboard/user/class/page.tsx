@@ -222,9 +222,9 @@ export default function StudentClassPage() {
         return;
       }
 
-      console.log("Member berhasil disimpan!");
+      console.log("Permintaan bergabung berhasil dikirim!");
       setJoinCode("");
-      setMessage("Berhasil bergabung ke kelas!");
+      setMessage("Permintaan bergabung dikirim. Tunggu approval coach.");
       await fetchJoinedClasses(user.id);
     } catch (err) {
       console.error("Unexpected error joining class:", err);
@@ -272,19 +272,19 @@ export default function StudentClassPage() {
               >
                 <span className="inline-flex items-center gap-2">
                   <PlusIcon size={18} weight="fill" />
-                  Join
+                  Request Join
                 </span>
               </TextButton>
             </div>
             {message ? (
               <p className="mt-4 text-sm text-gray-800">{message}</p>
             ) : (
-              <p className="mt-4 text-sm text-gray-600">Kamu bisa menambahkan kelas dengan kode di atas.</p>
+              <p className="mt-4 text-sm text-gray-600">Setelah memasukkan kode, coach akan menerima permintaanmu dan dapat approve atau decline.</p>
             )}
           </div>
 
           <div className="space-y-4">
-              {joinedClasses.length === 0 ? (
+            {joinedClasses.length === 0 ? (
               <div className="rounded-3xl border border-dashed border-gray-400 bg-white p-10 text-center text-gray-700 max-w-3xl mx-auto">
                 <p className="text-lg font-medium">Belum bergabung dengan kelas apa pun.</p>
                 <p className="mt-2 text-sm">Masukkan kode join kelas untuk memulai.</p>
@@ -293,19 +293,29 @@ export default function StudentClassPage() {
               joinedClasses.map((joinedClass) => (
                 <div
                   key={joinedClass.id}
-                  className="rounded-3xl border border-gray-300 bg-white p-6 shadow-[0_6px_20px_rgba(15,23,42,0.08)] max-w-3xl mx-auto"
+                  className="group cursor-pointer rounded-[24px] border border-gray-200 bg-white p-6 shadow-[0_12px_35px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:border-primary/40 hover:shadow-[0_18px_50px_rgba(15,23,42,0.16)]"
+                  onClick={() => router.push(`/dashboard/user/class/${joinedClass.id}`)}
                 >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.24em] text-gray-400">Joined Class</p>
-                      <h2 className="mt-2 text-2xl font-semibold text-gray-900">{joinedClass.name}</h2>
-                      <p className="mt-2 text-gray-500">Coach: {joinedClass.coach_name || "Tidak ada coach"}</p>
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <span className="inline-flex rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-primary">
+                        Joined Class
+                      </span>
+                      <h2 className="mt-4 text-2xl font-semibold text-slate-900 line-clamp-2">{joinedClass.name}</h2>
+                      <p className="mt-3 text-sm text-slate-600">{joinedClass.description || "Tidak ada deskripsi kelas."}</p>
                     </div>
-                    <div className="rounded-2xl bg-primary/5 px-4 py-2 text-sm font-semibold text-primary">
-                      Code: {joinedClass.join_code}
+                    <div className="flex flex-col items-start gap-3 sm:items-end">
+                      <div className="rounded-2xl bg-primary/5 px-4 py-2 text-sm font-semibold text-primary">
+                        Code: {joinedClass.join_code}
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                        Tap to open
+                      </div>
                     </div>
                   </div>
-                  <p className="mt-4 text-gray-600">{joinedClass.description || "Tidak ada deskripsi kelas."}</p>
+                  <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-500">
+                    <span>Coach: <span className="font-medium text-slate-900">{joinedClass.coach_name || "Tidak ada coach"}</span></span>
+                  </div>
                 </div>
               ))
             )}

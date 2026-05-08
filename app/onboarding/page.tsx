@@ -170,7 +170,7 @@ type ChatMessage = {
 type SpeechTarget = "other" | "nickname";
 
 type SpeakingCard = {
-  id: number;
+  id: string | number;
   title: string;
   promptText: string;
 };
@@ -771,6 +771,7 @@ export default function Home() {
   const requestedUnit = Math.min(2, Math.max(1, Number(searchParams.get("unit") ?? "1") || 1));
   const requestedPart = Math.min(3, Math.max(1, Number(searchParams.get("part") ?? "1") || 1));
   const autoStart = searchParams.get("autostart") === "1";
+  const assignmentId = searchParams.get("assignmentId");
   const replayOnboarding = searchParams.get("reset") === "1" || searchParams.get("replay") === "1";
   const [activeStep, setActiveStep] = useState(0);
   const [goal, setGoal] = useState(() => {
@@ -848,6 +849,8 @@ export default function Home() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isResponseTimerRunning, setIsResponseTimerRunning] = useState(false);
   const [flippedCriteria, setFlippedCriteria] = useState<Record<string, boolean>>({});
+  const [assignmentQuestions, setAssignmentQuestions] = useState<{ id: string; content: string; order_index: number }[]>([]);
+  const [isLoadingAssignment, setIsLoadingAssignment] = useState(false);
   const cueCardTimerRef = useRef<number | null>(null);
   const autoStartRef = useRef(false);
   const keepTryingSentRef = useRef(false);
@@ -902,6 +905,37 @@ export default function Home() {
     answerTranscriptRef.current = answerTranscript;
   }, [answerTranscript]);
 
+  // Fetch assignment questions if assignmentId is provided
+  useEffect(() => {
+    if (!assignmentId) return;
+
+    const fetchAssignmentQuestions = async () => {
+      setIsLoadingAssignment(true);
+      try {
+        const { data, error } = await supabase
+          .from("assignment_questions")
+          .select("id, content, order_index")
+          .eq("assignment_id", assignmentId)
+          .order("order_index");
+
+        if (error) {
+          console.error("Error fetching assignment questions:", error);
+          setSpeechError("Failed to load assignment questions.");
+          return;
+        }
+
+        setAssignmentQuestions(data || []);
+      } catch (err) {
+        console.error("Error fetching assignment questions:", err);
+        setSpeechError("Failed to load assignment questions.");
+      } finally {
+        setIsLoadingAssignment(false);
+      }
+    };
+
+    fetchAssignmentQuestions();
+  }, [assignmentId]);
+
   const persistPracticeProgress = async (analysis: SpeakingAnalysis, partIndex: number) => {
     const {
       data: { user },
@@ -945,6 +979,15 @@ export default function Home() {
   };
 
   const speakingCards = useMemo<SpeakingCard[]>(() => {
+    // If we have assignment questions, use them instead of standard cards
+    if (assignmentQuestions.length > 0) {
+      return assignmentQuestions.map((question, index) => ({
+        id: question.id,
+        title: `Assignment - Part ${requestedPart} - Question ${index + 1}`,
+        promptText: `Assignment Question ${index + 1}: ${question.content}\n\nAnswer naturally and clearly.`,
+      }));
+    }
+
     const unitPrefix = `Unit ${requestedUnit}`;
     const part1Topic = PART_1_TOPICS[UNIT_PART_1_TOPIC_INDEX[requestedUnit - 1] ?? 0];
     
@@ -997,7 +1040,7 @@ Describe a topic that feels useful for your current level (${speakingLevel}) and
     }
 
     return cards;
-  }, [goal, speakingLevel, targetTime, practiceMode, requestedPart, requestedUnit]);
+  }, [assignmentQuestions, goal, speakingLevel, targetTime, practiceMode, requestedPart, requestedUnit]);
 
   const [selectedSpeakingCards, setSelectedSpeakingCards] = useState<SpeakingCard[] | null>(null);
   const cardsInUse = selectedSpeakingCards ?? speakingCards;
@@ -1009,11 +1052,11 @@ Describe a topic that feels useful for your current level (${speakingLevel}) and
 
   useEffect(() => {
     if (!autoStart || autoStartRef.current) return;
-    if (practiceMode === null) return;
+    if (practiceMode === null && !assignmentId) return;
 
     autoStartRef.current = true;
     setActiveStep(WIZARD_STEPS.length - 1);
-  }, [autoStart, practiceMode]);
+  }, [autoStart, practiceMode, assignmentId]);
 
   useEffect(() => {
     // Reset Part 1 topic selection when part or unit changes
@@ -1030,8 +1073,8 @@ Describe a topic that feels useful for your current level (${speakingLevel}) and
 
     autoStartRef.current = false;
     
-    // For Part 1, show topic selector instead of auto-starting
-    if (requestedPart === 1 && selectedPart1TopicIndex === null) {
+    // For Part 1 without assignment, show topic selector instead of auto-starting
+    if (requestedPart === 1 && selectedPart1TopicIndex === null && !assignmentId) {
       setShowTopicSelector(true);
     } else {
       startSpeaking();

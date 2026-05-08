@@ -63,6 +63,22 @@ create index if not exists classes_created_by_idx on public.classes(created_by);
 create index if not exists classes_coach_id_idx on public.classes(coach_id);
 create index if not exists class_members_student_idx on public.class_members(student_id);
 
+create table if not exists public.class_join_requests (
+  id uuid primary key default gen_random_uuid(),
+  class_id uuid not null references public.classes(id) on delete cascade,
+  student_id uuid not null references public.profiles(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','approved','declined')),
+  requested_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+create unique index if not exists class_join_requests_unique on public.class_join_requests(class_id, student_id);
+create index if not exists class_join_requests_class_idx on public.class_join_requests(class_id);
+create index if not exists class_join_requests_status_idx on public.class_join_requests(status);
+create index if not exists class_join_requests_requested_at_idx on public.class_join_requests(requested_at desc);
+
+alter table public.class_join_requests enable row level security;
+
 -- 2c) Student progress table (1 row per student)
 create table if not exists public.student_progress (
   student_id uuid primary key references public.profiles(id) on delete cascade,
@@ -623,6 +639,45 @@ using (
   public.user_is_class_owner(auth.uid(), class_id)
 );
 
+-- Policies for class join requests
+drop policy if exists "class_join_requests_select" on public.class_join_requests;
+drop policy if exists "class_join_requests_insert" on public.class_join_requests;
+drop policy if exists "class_join_requests_update" on public.class_join_requests;
+drop policy if exists "class_join_requests_delete" on public.class_join_requests;
+
+create policy "class_join_requests_select"
+on public.class_join_requests for select
+to authenticated
+using (
+  student_id = auth.uid()
+  or public.user_is_class_owner(auth.uid(), class_id)
+);
+
+create policy "class_join_requests_insert"
+on public.class_join_requests for insert
+to authenticated
+with check (
+  student_id = auth.uid()
+  and status = 'pending'
+);
+
+create policy "class_join_requests_update"
+on public.class_join_requests for update
+to authenticated
+using (
+  public.user_is_class_owner(auth.uid(), class_id)
+)
+with check (
+  public.user_is_class_owner(auth.uid(), class_id)
+);
+
+create policy "class_join_requests_delete"
+on public.class_join_requests for delete
+to authenticated
+using (
+  public.user_is_class_owner(auth.uid(), class_id)
+);
+
 -- Function for student to join a class using code [NEW]
 create or replace function public.join_class_by_code(p_join_code text)
 returns void
@@ -645,12 +700,123 @@ begin
     select 1 from public.profiles
     where id = auth.uid() and role = 'user'
   ) then
-    raise exception 'Hanya akun student (user) yang dapat bergabung ke dalam kelas.';
+    raise exception 'Hanya akun student (user) yang dapat meminta bergabung ke dalam kelas.';
   end if;
 
-  insert into public.class_members (class_id, student_id)
-  values (v_class_id, auth.uid())
+  if exists (
+    select 1 from public.class_members
+    where class_id = v_class_id and student_id = auth.uid()
+  ) then
+    raise exception 'Kamu sudah tergabung dalam kelas ini.';
+  end if;
+
+  if exists (
+    select 1 from public.class_join_requests
+    where class_id = v_class_id and student_id = auth.uid() and status = 'pending'
+  ) then
+    return;
+  end if;
+
+  if exists (
+    select 1 from public.class_join_requests
+    where class_id = v_class_id and student_id = auth.uid() and status = 'declined'
+  ) then
+    update public.class_join_requests
+    set status = 'pending',
+        requested_at = now(),
+        resolved_at = null
+    where class_id = v_class_id and student_id = auth.uid();
+    return;
+  end if;
+
+  insert into public.class_join_requests (class_id, student_id, status, requested_at)
+  values (v_class_id, auth.uid(), 'pending', now())
   on conflict do nothing;
+end;
+$$;
+
+create or replace function public.expire_pending_join_requests()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.class_join_requests
+  set status = 'declined',
+      resolved_at = now()
+  where status = 'pending'
+    and requested_at < now() - interval '7 days';
+end;
+$$;
+
+create or replace function public.approve_join_request(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_class_id uuid;
+  v_student_id uuid;
+begin
+  select class_id, student_id into v_class_id, v_student_id
+  from public.class_join_requests
+  where id = p_request_id
+    and status = 'pending';
+
+  if not found then
+    raise exception 'Permintaan tidak ditemukan atau sudah diproses.';
+  end if;
+
+  update public.class_join_requests
+  set status = 'approved',
+      resolved_at = now()
+  where id = p_request_id;
+
+  insert into public.class_members (class_id, student_id)
+  values (v_class_id, v_student_id)
+  on conflict do nothing;
+end;
+$$;
+
+create or replace function public.approve_all_join_requests(p_class_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.class_join_requests
+  set status = 'approved',
+      resolved_at = now()
+  where class_id = p_class_id
+    and status = 'pending';
+
+  insert into public.class_members (class_id, student_id)
+  select class_id, student_id
+  from public.class_join_requests
+  where class_id = p_class_id
+    and status = 'approved';
+end;
+$$;
+
+create or replace function public.decline_join_request(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.class_join_requests
+  set status = 'declined',
+      resolved_at = now()
+  where id = p_request_id
+    and status = 'pending';
+
+  if not found then
+    raise exception 'Permintaan tidak ditemukan atau sudah diproses.';
+  end if;
 end;
 $$;
 
@@ -722,6 +888,216 @@ using (
   )
 );
 
+-- 5a) Assignment tables [NEW]
+create table if not exists public.assignments (
+  id uuid primary key default gen_random_uuid(),
+  class_id uuid not null references public.classes(id) on delete cascade,
+  coach_id uuid not null references public.profiles(id) on delete cascade,
+  part int not null default 1,
+  title text not null,
+  description text,
+  due_at timestamptz,
+  is_active boolean default true,
+  created_at timestamptz not null default now()
+);
+
+alter table public.assignments
+  add column if not exists part int not null default 1;
+
+create table if not exists public.assignment_questions (
+  id uuid primary key default gen_random_uuid(),
+  assignment_id uuid not null references public.assignments(id) on delete cascade,
+  content text not null,
+  type text not null default 'question' check (type in ('question', 'bullet')),
+  order_index int default 0,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.assignment_submissions (
+  assignment_id uuid not null references public.assignments(id) on delete cascade,
+  student_id uuid not null references public.profiles(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','in_progress','submitted')),
+  started_at timestamptz,
+  submitted_at timestamptz,
+  updated_at timestamptz not null default now(),
+  primary key (assignment_id, student_id)
+);
+
+-- Alter statements for assignment_questions table
+alter table public.assignment_questions
+  add column if not exists type text not null default 'question' check (type in ('question', 'bullet'));
+
+-- Indexes for assignments
+create index if not exists assignments_class_id_idx on public.assignments(class_id);
+create index if not exists assignments_coach_id_idx on public.assignments(coach_id);
+create index if not exists assignments_created_at_idx on public.assignments(created_at desc);
+
+-- Indexes for assignment_questions
+create index if not exists assignment_questions_assignment_id_idx on public.assignment_questions(assignment_id);
+create index if not exists assignment_questions_order_index_idx on public.assignment_questions(order_index);
+
+-- Indexes for assignment_submissions
+create index if not exists assignment_submissions_student_id_idx on public.assignment_submissions(student_id);
+create index if not exists assignment_submissions_status_idx on public.assignment_submissions(status);
+
+-- RLS for assignments
+alter table public.assignments enable row level security;
+
+drop policy if exists "assignments_select" on public.assignments;
+drop policy if exists "assignments_insert" on public.assignments;
+drop policy if exists "assignments_update" on public.assignments;
+drop policy if exists "assignments_delete" on public.assignments;
+
+create policy "assignments_select"
+on public.assignments for select
+to authenticated
+using (
+  coach_id = auth.uid()
+  or exists (
+    select 1 from public.class_members cm
+    where cm.class_id = assignments.class_id
+      and cm.student_id = auth.uid()
+  )
+);
+
+create policy "assignments_insert"
+on public.assignments for insert
+to authenticated
+with check (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.role = 'guru'
+  )
+  and coach_id = auth.uid()
+);
+
+create policy "assignments_update"
+on public.assignments for update
+to authenticated
+using (coach_id = auth.uid())
+with check (coach_id = auth.uid());
+
+create policy "assignments_delete"
+on public.assignments for delete
+to authenticated
+using (coach_id = auth.uid());
+
+-- RLS for assignment_questions
+alter table public.assignment_questions enable row level security;
+
+drop policy if exists "assignment_questions_select" on public.assignment_questions;
+drop policy if exists "assignment_questions_insert" on public.assignment_questions;
+drop policy if exists "assignment_questions_update" on public.assignment_questions;
+drop policy if exists "assignment_questions_delete" on public.assignment_questions;
+
+create policy "assignment_questions_select"
+on public.assignment_questions for select
+to authenticated
+using (
+  exists (
+    select 1 from public.assignments a
+    where a.id = assignment_questions.assignment_id
+      and (
+        a.coach_id = auth.uid()
+        or exists (
+          select 1 from public.class_members cm
+          where cm.class_id = a.class_id
+            and cm.student_id = auth.uid()
+        )
+      )
+  )
+);
+
+create policy "assignment_questions_insert"
+on public.assignment_questions for insert
+to authenticated
+with check (
+  exists (
+    select 1 from public.assignments a
+    where a.id = assignment_questions.assignment_id
+      and a.coach_id = auth.uid()
+  )
+);
+
+create policy "assignment_questions_update"
+on public.assignment_questions for update
+to authenticated
+using (
+  exists (
+    select 1 from public.assignments a
+    where a.id = assignment_questions.assignment_id
+      and a.coach_id = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1 from public.assignments a
+    where a.id = assignment_questions.assignment_id
+      and a.coach_id = auth.uid()
+  )
+);
+
+create policy "assignment_questions_delete"
+on public.assignment_questions for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.assignments a
+    where a.id = assignment_questions.assignment_id
+      and a.coach_id = auth.uid()
+  )
+);
+
+-- RLS for assignment_submissions
+alter table public.assignment_submissions enable row level security;
+
+drop policy if exists "assignment_submissions_select" on public.assignment_submissions;
+drop policy if exists "assignment_submissions_insert" on public.assignment_submissions;
+drop policy if exists "assignment_submissions_update" on public.assignment_submissions;
+drop policy if exists "assignment_submissions_delete" on public.assignment_submissions;
+
+create policy "assignment_submissions_select"
+on public.assignment_submissions for select
+to authenticated
+using (
+  student_id = auth.uid()
+  or exists (
+    select 1 from public.assignments a
+    where a.id = assignment_submissions.assignment_id
+      and a.coach_id = auth.uid()
+  )
+);
+
+create policy "assignment_submissions_insert"
+on public.assignment_submissions for insert
+to authenticated
+with check (
+  student_id = auth.uid()
+  and exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.role = 'user'
+  )
+);
+
+create policy "assignment_submissions_update"
+on public.assignment_submissions for update
+to authenticated
+using (student_id = auth.uid())
+with check (student_id = auth.uid());
+
+create policy "assignment_submissions_delete"
+on public.assignment_submissions for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.assignments a
+    where a.id = assignment_submissions.assignment_id
+      and a.coach_id = auth.uid()
+  )
+);
+
 -- 6) Run once to make your account admin (replace with your login email)
 -- update public.profiles
 -- set role = 'admin'
@@ -743,7 +1119,7 @@ begin
     email = 'vinatara27@gmail.com',
     role = 'user'
   where email = 'vinatara27@gmail.com';
-end
+end 
 $$;
 
 -- If the auth account still cannot sign in after this,

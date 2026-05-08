@@ -95,6 +95,26 @@ export default function QuestionBank({
         { type: "question" | "bullet"; content: string }[]
     >([]);
 
+    // Auto-generate structure when part changes
+    useEffect(() => {
+        if (newPart === 2) {
+            // Part 2: Cue card structure (1 question + 3 bullets)
+            setNewDetails([
+                { type: "question", content: "" },
+                { type: "bullet", content: "" },
+                { type: "bullet", content: "" },
+                { type: "bullet", content: "" },
+            ]);
+        } else {
+            // Part 1 & 3: Default to 3 questions
+            setNewDetails([
+                { type: "question", content: "" },
+                { type: "question", content: "" },
+                { type: "question", content: "" },
+            ]);
+        }
+    }, [newPart]);
+
     useEffect(() => {
         const load = async () => {
             setLoading(true);

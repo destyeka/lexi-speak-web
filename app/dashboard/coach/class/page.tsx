@@ -20,6 +20,12 @@ interface Student {
   email: string;
 }
 
+interface JoinRequest {
+  id: string;
+  email: string;
+  requested_at: string;
+}
+
 export default function ClassPage() {
   const [classes, setClasses] = useState<Class[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -29,6 +35,9 @@ export default function ClassPage() {
   const [selectedClass, setSelectedClass] = useState<Class | null>(null);
   const [editingClass, setEditingClass] = useState<Class | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -217,25 +226,133 @@ export default function ClassPage() {
     }
   };
 
-  const handleViewStudents = async (classItem: Class) => {
+  const fetchClassMembersAndRequests = async (classItem: Class) => {
     try {
-      setSelectedClass(classItem);
-      const { data, error } = await supabase
+      setActionLoading(true);
+      setNotice(null);
+
+      const { error: expireError } = await supabase.rpc("expire_pending_join_requests");
+      if (expireError) {
+        console.warn("Error expiring pending join requests:", expireError.message);
+      }
+
+      const { data: memberData, error: memberError } = await supabase
         .from("class_members")
         .select("profiles!inner(id, email)")
         .eq("class_id", classItem.id);
 
-      if (error) {
-        console.error("Error fetching class members:", error.message);
-        alert("Failed to load students: " + error.message);
-        return;
+      if (memberError) {
+        throw memberError;
       }
 
-      setStudents((data as any[] | null)?.map((d) => d.profiles as Student) || []);
+      const { data: requestData, error: requestError } = await supabase
+        .from("class_join_requests")
+        .select("id, requested_at, profiles!inner(id, email)")
+        .eq("class_id", classItem.id)
+        .eq("status", "pending");
+
+      if (requestError) {
+        throw requestError;
+      }
+
+      setStudents((memberData as any[] | null)?.map((d) => d.profiles as Student) || []);
+      setJoinRequests(
+        (requestData as any[] | null)?.map((d) => ({
+          id: d.id,
+          email: d.profiles.email,
+          requested_at: d.requested_at,
+        })) || []
+      );
+    } catch (err) {
+      console.error("Error fetching class members or pending requests:", err);
+      alert("Failed to load students or pending requests.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleViewStudents = async (classItem: Class) => {
+    try {
+      setSelectedClass(classItem);
+      setStudents([]);
+      setJoinRequests([]);
+      setNotice(null);
       setShowModal(true);
+      await fetchClassMembersAndRequests(classItem);
     } catch (err) {
       console.error("Unexpected error in handleViewStudents:", err);
       alert("An unexpected error occurred");
+    }
+  };
+
+  const handleApproveRequest = async (requestId: string) => {
+    if (!selectedClass) return;
+    try {
+      setActionLoading(true);
+      await supabase.rpc("approve_join_request", { p_request_id: requestId });
+      setNotice("Request approved.");
+      await fetchClassMembersAndRequests(selectedClass);
+    } catch (err) {
+      console.error("Error approving request:", err);
+      alert("Failed to approve request.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleApproveAll = async () => {
+    if (!selectedClass) return;
+    try {
+      setActionLoading(true);
+      await supabase.rpc("approve_all_join_requests", { p_class_id: selectedClass.id });
+      setNotice("Semua request telah disetujui.");
+      await fetchClassMembersAndRequests(selectedClass);
+    } catch (err) {
+      console.error("Error approving all requests:", err);
+      alert("Failed to approve all requests.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeclineRequest = async (requestId: string) => {
+    if (!selectedClass) return;
+    try {
+      setActionLoading(true);
+      await supabase.rpc("decline_join_request", { p_request_id: requestId });
+      setNotice("Request declined.");
+      await fetchClassMembersAndRequests(selectedClass);
+    } catch (err) {
+      console.error("Error declining request:", err);
+      alert("Failed to decline request.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRemoveStudent = async (studentId: string, studentEmail: string) => {
+    if (!selectedClass) return;
+    const confirmed = confirm(`Hapus member ${studentEmail} dari ${selectedClass.name}?`);
+    if (!confirmed) return;
+
+    try {
+      setActionLoading(true);
+      const { error } = await supabase
+        .from("class_members")
+        .delete()
+        .match({ class_id: selectedClass.id, student_id: studentId });
+
+      if (error) {
+        throw error;
+      }
+
+      setNotice("Member berhasil dihapus.");
+      await fetchClassMembersAndRequests(selectedClass);
+    } catch (err) {
+      console.error("Error removing student:", err);
+      alert("Failed to remove member.");
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -300,7 +417,7 @@ export default function ClassPage() {
               <div
                 key={cls.id}
                 className="group cursor-pointer"
-                onClick={() => handleViewStudents(cls)}
+                onClick={() => router.push(`/dashboard/coach/class/${cls.id}`)}
               >
                 <div className="relative overflow-hidden rounded-[24px] border border-gray-200 bg-gradient-to-br from-white via-white to-rose-50/50 p-5 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-[0_18px_40px_rgba(15,23,42,0.16)] w-[360px]">
                   <div className="pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full bg-primary/10 blur-2xl" />
@@ -331,9 +448,17 @@ export default function ClassPage() {
                       >
                         <PencilIcon size={20} weight="regular" />
                       </button>
-                      <div className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white/90 text-primary/70 shadow-sm transition-colors group-hover:text-primary">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewStudents(cls);
+                        }}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white/90 text-primary/70 shadow-sm transition-colors hover:bg-primary/5 hover:text-primary"
+                        title="Manage students"
+                      >
                         <UsersIcon weight="regular" size={20} />
-                      </div>
+                      </button>
                     </div>
                   </div>
 
@@ -506,7 +631,58 @@ export default function ClassPage() {
                 </h2>
               </div>
 
-              <div className="p-6">
+              <div className="p-6 space-y-6">
+                {notice ? (
+                  <div className="rounded-2xl border border-green-100 bg-green-50 p-4 text-sm text-green-800">
+                    {notice}
+                  </div>
+                ) : null}
+
+                {joinRequests.length > 0 && (
+                  <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-900">Pending Join Requests</h3>
+                        <p className="text-sm text-gray-600">Approve atau decline satu per satu, atau approve all sekaligus.</p>
+                      </div>
+                      <TextButton
+                        variant="primary"
+                        onClick={handleApproveAll}
+                        disabled={actionLoading}
+                        className="whitespace-nowrap"
+                      >
+                        Approve All
+                      </TextButton>
+                    </div>
+                    <div className="space-y-3">
+                      {joinRequests.map((request) => (
+                        <div key={request.id} className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">{request.email}</p>
+                            <p className="text-xs text-gray-500">Requested at {new Date(request.requested_at).toLocaleString()}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <TextButton
+                              variant="primary"
+                              onClick={() => handleApproveRequest(request.id)}
+                              disabled={actionLoading}
+                            >
+                              Approve
+                            </TextButton>
+                            <TextButton
+                              variant="secondary"
+                              onClick={() => handleDeclineRequest(request.id)}
+                              disabled={actionLoading}
+                            >
+                              Decline
+                            </TextButton>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {students.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 text-center">
                     <div className="text-4xl mb-3">👥</div>
@@ -527,6 +703,14 @@ export default function ClassPage() {
                             {student.email}
                           </p>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveStudent(student.id, student.email)}
+                          disabled={actionLoading}
+                          className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                        >
+                          <TrashIcon size={18} weight="regular" />
+                        </button>
                       </div>
                     ))}
                   </div>

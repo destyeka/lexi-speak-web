@@ -35,6 +35,7 @@ const mapLoginErrorMessage = (rawMessage: string) => {
 const getDashboardPathForRole = (role: AppRole) => {
   if (role === "admin") return "/dashboard/admin";
   if (role === "guru") return "/dashboard/coach";
+  if (role === "user") return "/dashboard/user";
   return "/onboarding";
 };
 
