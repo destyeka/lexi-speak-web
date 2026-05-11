@@ -524,9 +524,18 @@ export default function QuestionBank({
                                                 </td>
 
                                                 <td className="px-5 py-4 text-sm">
-                                                    {row.is_active
-                                                        ? "Active"
-                                                        : "Inactive"}
+                                                    <span className={`
+      inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase
+
+      ${row.is_active === true
+                                                            ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
+                                                            : "bg-gray-100 text-gray-500 dark:bg-gray-500/10 dark:text-gray-400"
+                                                        }
+    `}>
+                                                        {row.is_active
+                                                            ? "Active"
+                                                            : "Inactive"}
+                                                    </span>
                                                 </td>
 
                                                 <td className="px-5 py-4 text-sm text-gray-500">
@@ -663,9 +672,18 @@ export default function QuestionBank({
                                                 </td>
 
                                                 <td className="px-5 py-4 text-sm">
-                                                    {row.is_active
-                                                        ? "Active"
-                                                        : "Inactive"}
+                                                    <span className={`
+      inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase
+
+      ${row.is_active === true
+                                                            ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
+                                                            : "bg-gray-100 text-gray-500 dark:bg-gray-500/10 dark:text-gray-400"
+                                                        }
+    `}>
+                                                        {row.is_active
+                                                            ? "Active"
+                                                            : "Inactive"}
+                                                    </span>
                                                 </td>
 
                                                 <td className="px-5 py-4 text-sm text-gray-500">
