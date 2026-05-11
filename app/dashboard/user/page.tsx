@@ -1,9 +1,10 @@
 "use client";
 
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import RoleOverviewPanel from "../_components/RoleOverviewPanel";
 
-export default function UserDashboardPage() {
+function UserDashboardContent() {
   const searchParams = useSearchParams();
   const tab = searchParams.get("tab") || "dashboard";
 
@@ -29,12 +30,19 @@ export default function UserDashboardPage() {
     );
   }
 
-  // Default dashboard view
   return (
     <RoleOverviewPanel
       expectedRole="user"
       title="Student Dashboard"
       description="Student hub berbasis unit card. Ada 2 unit, masing-masing berisi 3 part, dengan progress bar di dalam kartu dan coach hanya aktif saat test dimulai."
     />
+  );
+}
+
+export default function UserDashboardPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <UserDashboardContent />
+    </Suspense>
   );
 }
