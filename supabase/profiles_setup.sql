@@ -687,10 +687,11 @@ set search_path = public
 as $$
 declare
   v_class_id uuid;
+  v_normalized_code text := lower(trim(p_join_code));
 begin
   select id into v_class_id
   from public.classes
-  where join_code = p_join_code;
+  where lower(trim(join_code)) = v_normalized_code;
 
   if not found then
     raise exception 'Kode kelas tidak ditemukan atau tidak valid.';
@@ -903,6 +904,9 @@ create table if not exists public.assignments (
 
 alter table public.assignments
   add column if not exists part int not null default 1;
+
+alter table public.assignments
+  add column if not exists start_at timestamptz;
 
 create table if not exists public.assignment_questions (
   id uuid primary key default gen_random_uuid(),

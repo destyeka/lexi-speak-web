@@ -11,6 +11,7 @@ interface Assignment {
   part?: number;
   title: string;
   description: string | null;
+  start_at: string | null;
   due_at: string | null;
   is_active: boolean;
   created_at: string | null;
@@ -133,6 +134,12 @@ export default function StudentClassAssignmentPage() {
       return;
     }
 
+    const startDate = assignment.start_at ? new Date(assignment.start_at).getTime() : null;
+    if (startDate && startDate > Date.now()) {
+      alert("Assignment belum bisa dikerjakan sebelum start date.");
+      return;
+    }
+
     const submissionPayload = {
       assignment_id: assignment.id,
       student_id: user.id,
@@ -177,7 +184,9 @@ export default function StudentClassAssignmentPage() {
           ) : (
             assignments.map((assignment) => {
               const dueDate = assignment.due_at ? new Date(assignment.due_at) : null;
+              const startDate = assignment.start_at ? new Date(assignment.start_at) : null;
               const isExpired = dueDate ? dueDate.getTime() < Date.now() : false;
+              const isLocked = startDate ? startDate.getTime() > Date.now() : false;
               const submission = submissions[assignment.id];
               const statusLabel = submission
                 ? submission.status === "submitted"
@@ -202,6 +211,8 @@ export default function StudentClassAssignmentPage() {
                       <p className="mt-3 text-sm leading-6 text-slate-600">{assignment.description || "Tidak ada deskripsi tugas."}</p>
                       <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-500">
                         <span>Part: {assignment.part ?? 1}</span>
+                        <span>|</span>
+                        <span>Start: {formatDate(assignment.start_at)}</span>
                         <span>|</span>
                         <span>Created: {formatDate(assignment.created_at)}</span>
                       </div>
@@ -231,7 +242,13 @@ export default function StudentClassAssignmentPage() {
                   ) : null}
 
                   <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-sm text-slate-500">{isExpired ? "Assignment sudah lewat tenggat waktu." : "Klik untuk mulai atau lanjutkan tugas."}</p>
+                    <p className="text-sm text-slate-500">
+                      {isExpired
+                        ? "Assignment sudah lewat tenggat waktu."
+                        : isLocked
+                        ? `Assignment akan tersedia mulai ${formatDate(assignment.start_at)}.`
+                        : "Klik untuk mulai atau lanjutkan tugas."}
+                    </p>
                     <button
                       type="button"
                       onClick={async () => {
@@ -240,9 +257,21 @@ export default function StudentClassAssignmentPage() {
                           alert("Assignment is expired and cannot be started.");
                           return;
                         }
+                        const startFuture = assignment.start_at ? new Date(assignment.start_at).getTime() > Date.now() : false;
+                        if (startFuture) {
+                          alert("Assignment belum bisa dikerjakan sebelum start date.");
+                          return;
+                        }
                         await handleStartAssignment(assignment);
                       }}
-                      className="inline-flex items-center justify-center rounded-2xl bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary/90"
+                      disabled={isExpired || isLocked}
+                      className={
+                        `inline-flex items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+                          isExpired || isLocked
+                            ? "bg-slate-300 text-slate-600 cursor-not-allowed"
+                            : "bg-primary text-white hover:bg-primary/90"
+                        }`
+                      }
                     >
                       <PlayIcon size={18} />
                       <span className="ml-2">Start</span>

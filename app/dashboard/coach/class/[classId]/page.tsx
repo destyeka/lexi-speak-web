@@ -16,6 +16,7 @@ interface Assignment {
   part: number;
   title: string;
   description: string | null;
+  start_at: string | null;
   due_at: string | null;
   is_active: boolean;
   created_at: string | null;
@@ -60,24 +61,65 @@ export default function ClassAssignmentsPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPart, setEditPart] = useState(1);
+  const [editStartAt, setEditStartAt] = useState("");
+  const [editStartTime, setEditStartTime] = useState("00:00");
   const [editDueAt, setEditDueAt] = useState("");
+  const [editDueTime, setEditDueTime] = useState("23:59");
   const [editActive, setEditActive] = useState(true);
   const [editQuestions, setEditQuestions] = useState<Question[]>([]);
 
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newPart, setNewPart] = useState(1);
+  const [newStartAt, setNewStartAt] = useState("");
+  const [newStartTime, setNewStartTime] = useState("00:00");
   const [newDueAt, setNewDueAt] = useState("");
+  const [newDueTime, setNewDueTime] = useState("23:59");
   const [newActive, setNewActive] = useState(true);
   const [newQuestions, setNewQuestions] = useState<Question[]>([]);
 
+  function formatLocalDate(date: Date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  function toLocalDate(dateString: string) {
+    const [year, month, day] = dateString.split("-").map(Number);
+    if (!year || !month || !day) return undefined;
+    return new Date(year, month - 1, day);
+  }
+
   const handleNewDueAtChange = useCallback(([selected]: Date[]) => {
-    setNewDueAt(selected ? selected.toISOString().slice(0, 10) : "");
+    setNewDueAt(selected ? formatLocalDate(selected) : "");
   }, []);
 
   const handleEditDueAtChange = useCallback(([selected]: Date[]) => {
-    setEditDueAt(selected ? selected.toISOString().slice(0, 10) : "");
+    setEditDueAt(selected ? formatLocalDate(selected) : "");
   }, []);
+
+  const handleNewStartAtChange = useCallback(([selected]: Date[]) => {
+    setNewStartAt(selected ? formatLocalDate(selected) : "");
+  }, []);
+
+  const handleEditStartAtChange = useCallback(([selected]: Date[]) => {
+    setEditStartAt(selected ? formatLocalDate(selected) : "");
+  }, []);
+
+  const dateTimeToIso = (dateString: string, timeString: string) => {
+    if (!dateString) return null;
+    const [year, month, day] = dateString.split("-").map(Number);
+    const [hours, minutes] = timeString.split(":").map(Number);
+    if (!year || !month || !day || hours === undefined || minutes === undefined) return null;
+    const date = new Date(year, month - 1, day, hours, minutes, 0, 0);
+    return date.toISOString();
+  };
+
+  const validateAssignmentDates = (startAt: string | null, dueAt: string | null) => {
+    if (!startAt || !dueAt) return null;
+    if (new Date(dueAt).getTime() < new Date(startAt).getTime()) {
+      return "Due date & time cannot be earlier than the start date & time.";
+    }
+    return null;
+  };
 
   const buildQuestionsForPart = (part: number) => {
     if (part === 2) {
@@ -210,7 +252,14 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
-    const dueAtValue = newDueAt ? selectedDateToEndOfDayIso(newDueAt) : null;
+    const startAtValue = dateTimeToIso(newStartAt, newStartTime);
+    const dueAtValue = dateTimeToIso(newDueAt, newDueTime);
+
+    const validationError = validateAssignmentDates(startAtValue, dueAtValue);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
 
     const { data, error } = await supabase
       .from("assignments")
@@ -220,6 +269,7 @@ export default function ClassAssignmentsPage() {
         part: newPart,
         title: newTitle,
         description: newDescription || null,
+        start_at: startAtValue,
         due_at: dueAtValue,
         is_active: newActive,
       })
@@ -250,7 +300,10 @@ export default function ClassAssignmentsPage() {
 
     setNewTitle("");
     setNewDescription("");
+    setNewStartAt("");
+    setNewStartTime("00:00");
     setNewDueAt("");
+    setNewDueTime("23:59");
     setNewActive(true);
     setNewQuestions([]);
     setIsCreateOpen(false);
@@ -264,7 +317,14 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
-    const dueAtValue = editDueAt ? selectedDateToEndOfDayIso(editDueAt) : null;
+    const startAtValue = dateTimeToIso(editStartAt, editStartTime);
+    const dueAtValue = dateTimeToIso(editDueAt, editDueTime);
+
+    const validationError = validateAssignmentDates(startAtValue, dueAtValue);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
 
     const { error } = await supabase
       .from("assignments")
@@ -272,6 +332,7 @@ export default function ClassAssignmentsPage() {
         title: editTitle,
         part: editPart,
         description: editDescription || null,
+        start_at: startAtValue,
         due_at: dueAtValue,
         is_active: editActive,
       })
@@ -317,7 +378,25 @@ export default function ClassAssignmentsPage() {
     setEditTitle(assignment.title);
     setEditDescription(assignment.description || "");
     setEditPart(assignment.part ?? 1);
-    setEditDueAt(assignment.due_at ? new Date(assignment.due_at).toISOString().slice(0, 10) : "");
+    
+    if (assignment.start_at) {
+      const startDate = new Date(assignment.start_at);
+      setEditStartAt(formatLocalDate(startDate));
+      setEditStartTime(`${String(startDate.getHours()).padStart(2, "0")}:${String(startDate.getMinutes()).padStart(2, "0")}`);
+    } else {
+      setEditStartAt("");
+      setEditStartTime("00:00");
+    }
+    
+    if (assignment.due_at) {
+      const dueDate = new Date(assignment.due_at);
+      setEditDueAt(formatLocalDate(dueDate));
+      setEditDueTime(`${String(dueDate.getHours()).padStart(2, "0")}:${String(dueDate.getMinutes()).padStart(2, "0")}`);
+    } else {
+      setEditDueAt("");
+      setEditDueTime("23:59");
+    }
+    
     setEditActive(assignment.is_active);
 
     const { data, error } = await supabase
@@ -432,6 +511,7 @@ export default function ClassAssignmentsPage() {
                 <tr className="border-b border-gray-100 dark:border-gray-800">
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Title</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Part</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Start</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Due</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Status</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Created</th>
@@ -455,6 +535,7 @@ export default function ClassAssignmentsPage() {
                       <tr key={assignment.id} className="border-b last:border-0 hover:bg-gray-50 dark:hover:bg-white/5">
                         <td className="px-5 py-4 text-sm font-medium">{assignment.title}</td>
                         <td className="px-5 py-4 text-sm">Part {assignment.part}</td>
+                        <td className="px-5 py-4 text-sm">{formatDate(assignment.start_at)}</td>
                         <td className="px-5 py-4 text-sm">{formatDate(assignment.due_at)}</td>
                         <td className="px-5 py-4 text-sm">
                           {assignment.is_active ? (isExpired ? "Expired" : "Active") : "Inactive"}
@@ -541,25 +622,28 @@ export default function ClassAssignmentsPage() {
 
         {isCreateOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
-            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold mb-4 text-primary">Create Assignment</h3>
-              <div className="grid gap-6 lg:grid-cols-[1fr_1.7fr]">
-                <div className="space-y-4">
-                  <div className="w-full p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl">
-                    <select
-                      value={newPart}
-                      onChange={(event) => {
-                        const selected = Number(event.target.value);
-                        setNewPart(selected);
-                        setNewQuestions(buildQuestionsForPart(selected));
-                      }}
-                      className="w-full outline-none bg-transparent"
-                    >
-                      <option value={1}>Part 1</option>
-                      <option value={2}>Part 2</option>
-                      <option value={3}>Part 3</option>
-                    </select>
-                  </div>
+              <div className="grid gap-6 lg:grid-cols-[1fr_1.7fr] flex-1 min-h-0">
+                <div className="space-y-4 overflow-y-auto pr-2">
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Part
+                    <div className="w-full mt-2 border border-gray-300 rounded-lg overflow-hidden">
+                      <select
+                        value={newPart}
+                        onChange={(event) => {
+                          const selected = Number(event.target.value);
+                          setNewPart(selected);
+                          setNewQuestions(buildQuestionsForPart(selected));
+                        }}
+                        className="w-full p-2 outline-none bg-white"
+                      >
+                        <option value={1}>Part 1</option>
+                        <option value={2}>Part 2</option>
+                        <option value={3}>Part 3</option>
+                      </select>
+                    </div>
+                  </label>
 
                   <label className="w-full block text-base font-bold text-primary">
                     Title
@@ -587,15 +671,51 @@ export default function ClassAssignmentsPage() {
                     <Toggle checked={newActive} onChange={setNewActive} />
                   </div>
 
-                  <div className="w-full p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl">
-                    <DatePicker
-                      id="create-assignment-due-date"
-                      defaultDate={newDueAt ? new Date(newDueAt) : undefined}
-                      onChange={handleNewDueAtChange}
-                      placeholder="Select due date"
-                      position="auto"
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Start Date
+                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
+                      <DatePicker
+                        id="create-assignment-start-date"
+                        defaultDate={newStartAt ? toLocalDate(newStartAt) : undefined}
+                        onChange={handleNewStartAtChange}
+                        placeholder="Select start date"
+                        position="auto"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Start Time
+                    <input
+                      type="time"
+                      value={newStartTime}
+                      onChange={(e) => setNewStartTime(e.target.value)}
+                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
                     />
-                  </div>
+                  </label>
+
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Due Date
+                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
+                      <DatePicker
+                        id="create-assignment-due-date"
+                        defaultDate={newDueAt ? toLocalDate(newDueAt) : undefined}
+                        onChange={handleNewDueAtChange}
+                        placeholder="Select due date"
+                        position="auto"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Due Time
+                    <input
+                      type="time"
+                      value={newDueTime}
+                      onChange={(e) => setNewDueTime(e.target.value)}
+                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
+                    />
+                  </label>
                 </div>
 
                 <div className="max-h-[calc(100vh-12rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-gray-50 p-4">
@@ -667,7 +787,7 @@ export default function ClassAssignmentsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 flex justify-end gap-2">
+              <div className="mt-4 border-t border-gray-200 pt-4 flex justify-end gap-2">
                 <TextButton variant="secondary" onClick={() => setIsCreateOpen(false)}>
                   Cancel
                 </TextButton>
@@ -681,25 +801,28 @@ export default function ClassAssignmentsPage() {
 
         {isEditOpen && editAssignment && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
-            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold mb-4 text-primary">Edit Assignment</h3>
-              <div className="grid gap-6 lg:grid-cols-[1fr_1.7fr]">
-                <div className="space-y-4">
-                  <div className="w-full p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl">
-                    <select
-                      value={editPart}
-                      onChange={(event) => {
-                        const selected = Number(event.target.value);
-                        setEditPart(selected);
-                        setEditQuestions(buildQuestionsForPart(selected));
-                      }}
-                      className="w-full outline-none bg-transparent"
-                    >
-                      <option value={1}>Part 1</option>
-                      <option value={2}>Part 2</option>
-                      <option value={3}>Part 3</option>
-                    </select>
-                  </div>
+              <div className="grid gap-6 lg:grid-cols-[1fr_1.7fr] flex-1 min-h-0">
+                <div className="space-y-4 overflow-y-auto pr-2">
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Part
+                    <div className="w-full mt-2 border border-gray-300 rounded-lg overflow-hidden">
+                      <select
+                        value={editPart}
+                        onChange={(event) => {
+                          const selected = Number(event.target.value);
+                          setEditPart(selected);
+                          setEditQuestions(buildQuestionsForPart(selected));
+                        }}
+                        className="w-full p-2 outline-none bg-white"
+                      >
+                        <option value={1}>Part 1</option>
+                        <option value={2}>Part 2</option>
+                        <option value={3}>Part 3</option>
+                      </select>
+                    </div>
+                  </label>
 
                   <label className="w-full block text-base font-bold text-primary">
                     Title
@@ -707,7 +830,7 @@ export default function ClassAssignmentsPage() {
                       className="flex-1 min-w-0 mt-2 my-3"
                       value={editTitle}
                       onChange={setEditTitle}
-                      placeholder="Assignment title"
+                      placeholder="Enter assignment title"
                     />
                   </label>
 
@@ -727,15 +850,51 @@ export default function ClassAssignmentsPage() {
                     <Toggle checked={editActive} onChange={setEditActive} />
                   </div>
 
-                  <div className="w-full p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl">
-                    <DatePicker
-                      id="edit-assignment-due-date"
-                      defaultDate={editDueAt ? new Date(editDueAt) : undefined}
-                      onChange={handleEditDueAtChange}
-                      placeholder="Select due date"
-                      position="auto"
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Start Date
+                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
+                      <DatePicker
+                        id="edit-assignment-start-date"
+                        defaultDate={editStartAt ? toLocalDate(editStartAt) : undefined}
+                        onChange={handleEditStartAtChange}
+                        placeholder="Select start date"
+                        position="auto"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Start Time
+                    <input
+                      type="time"
+                      value={editStartTime}
+                      onChange={(e) => setEditStartTime(e.target.value)}
+                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
                     />
-                  </div>
+                  </label>
+
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Due Date
+                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
+                      <DatePicker
+                        id="edit-assignment-due-date"
+                        defaultDate={editDueAt ? toLocalDate(editDueAt) : undefined}
+                        onChange={handleEditDueAtChange}
+                        placeholder="Select due date"
+                        position="auto"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="w-full block text-sm font-semibold text-primary">
+                    Due Time
+                    <input
+                      type="time"
+                      value={editDueTime}
+                      onChange={(e) => setEditDueTime(e.target.value)}
+                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
+                    />
+                  </label>
                 </div>
 
                 <div className="max-h-[calc(100vh-12rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-gray-50 p-4">
@@ -805,7 +964,7 @@ export default function ClassAssignmentsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 flex justify-end gap-2">
+              <div className="mt-4 border-t border-gray-200 pt-4 flex justify-end gap-2">
                 <TextButton variant="secondary" onClick={() => setIsEditOpen(false)}>
                   Cancel
                 </TextButton>

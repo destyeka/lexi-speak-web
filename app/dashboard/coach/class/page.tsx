@@ -39,6 +39,7 @@ export default function ClassPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [modalMode, setModalMode] = useState<"students" | "approval">("students");
   const [loading, setLoading] = useState(true);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
@@ -277,10 +278,26 @@ export default function ClassPage() {
       setStudents([]);
       setJoinRequests([]);
       setNotice(null);
+      setModalMode("students");
       setShowModal(true);
       await fetchClassMembersAndRequests(classItem);
     } catch (err) {
       console.error("Unexpected error in handleViewStudents:", err);
+      alert("An unexpected error occurred");
+    }
+  };
+
+  const handleViewApprovals = async (classItem: Class) => {
+    try {
+      setSelectedClass(classItem);
+      setStudents([]);
+      setJoinRequests([]);
+      setNotice(null);
+      setModalMode("approval");
+      setShowModal(true);
+      await fetchClassMembersAndRequests(classItem);
+    } catch (err) {
+      console.error("Unexpected error in handleViewApprovals:", err);
       alert("An unexpected error occurred");
     }
   };
@@ -447,6 +464,17 @@ export default function ClassPage() {
                         title="Edit class"
                       >
                         <PencilIcon size={20} weight="regular" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewApprovals(cls);
+                        }}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white/90 text-primary/70 shadow-sm transition-colors hover:bg-primary/5 hover:text-primary"
+                        title="Approval requests"
+                      >
+                        <CheckIcon weight="regular" size={20} />
                       </button>
                       <button
                         type="button"
@@ -627,7 +655,9 @@ export default function ClassPage() {
             <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-y-auto border border-gray-200">
               <div className="sticky top-0 bg-white rounded-t-3xl border-b border-gray-200 p-6">
                 <h2 className="text-2xl font-bold text-gray-900">
-                  Students in {selectedClass.name}
+                  {modalMode === "approval"
+                    ? `Approval Requests for ${selectedClass.name}`
+                    : `Students in ${selectedClass.name}`}
                 </h2>
               </div>
 
@@ -638,82 +668,91 @@ export default function ClassPage() {
                   </div>
                 ) : null}
 
-                {joinRequests.length > 0 && (
+                {modalMode === "approval" ? (
                   <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <h3 className="text-lg font-semibold text-gray-900">Pending Join Requests</h3>
-                        <p className="text-sm text-gray-600">Approve atau decline satu per satu, atau approve all sekaligus.</p>
+                        <p className="text-sm text-gray-600">Approve atau decline setiap request di bawah ini.</p>
                       </div>
-                      <TextButton
-                        variant="primary"
-                        onClick={handleApproveAll}
-                        disabled={actionLoading}
-                        className="whitespace-nowrap"
-                      >
-                        Approve All
-                      </TextButton>
+                      {joinRequests.length > 0 ? (
+                        <TextButton
+                          variant="primary"
+                          onClick={handleApproveAll}
+                          disabled={actionLoading}
+                          className="whitespace-nowrap"
+                        >
+                          Approve All
+                        </TextButton>
+                      ) : null}
                     </div>
-                    <div className="space-y-3">
-                      {joinRequests.map((request) => (
-                        <div key={request.id} className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <p className="text-sm font-semibold text-gray-900">{request.email}</p>
-                            <p className="text-xs text-gray-500">Requested at {new Date(request.requested_at).toLocaleString()}</p>
+                    {joinRequests.length > 0 ? (
+                      <div className="space-y-3">
+                        {joinRequests.map((request) => (
+                          <div key={request.id} className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">{request.email}</p>
+                              <p className="text-xs text-gray-500">Requested at {new Date(request.requested_at).toLocaleString()}</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <TextButton
+                                variant="primary"
+                                onClick={() => handleApproveRequest(request.id)}
+                                disabled={actionLoading}
+                              >
+                                Approve
+                              </TextButton>
+                              <TextButton
+                                variant="secondary"
+                                onClick={() => handleDeclineRequest(request.id)}
+                                disabled={actionLoading}
+                              >
+                                Decline
+                              </TextButton>
+                            </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <TextButton
-                              variant="primary"
-                              onClick={() => handleApproveRequest(request.id)}
-                              disabled={actionLoading}
-                            >
-                              Approve
-                            </TextButton>
-                            <TextButton
-                              variant="secondary"
-                              onClick={() => handleDeclineRequest(request.id)}
-                              disabled={actionLoading}
-                            >
-                              Decline
-                            </TextButton>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-10 text-center">
+                        <div className="text-4xl mb-3">🕒</div>
+                        <p className="text-gray-600">Tidak ada request saat ini.</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  students.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-8 text-center">
+                      <div className="text-4xl mb-3">👥</div>
+                      <p className="text-gray-600">No students joined yet</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {students.map((student) => (
+                        <div
+                          key={student.id}
+                          className="flex items-center gap-3 p-3 bg-tertiary rounded-lg hover:bg-tertiary/80 transition-colors"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-r from-secondary to-primary flex items-center justify-center text-white font-bold">
+                            {student.email.charAt(0).toUpperCase()}
                           </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">
+                              {student.email}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveStudent(student.id, student.email)}
+                            disabled={actionLoading}
+                            className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                          >
+                            <TrashIcon size={18} weight="regular" />
+                          </button>
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {students.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-8 text-center">
-                    <div className="text-4xl mb-3">👥</div>
-                    <p className="text-gray-600">No students joined yet</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {students.map((student) => (
-                      <div
-                        key={student.id}
-                        className="flex items-center gap-3 p-3 bg-tertiary rounded-lg hover:bg-tertiary/80 transition-colors"
-                      >
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-r from-secondary to-primary flex items-center justify-center text-white font-bold">
-                          {student.email.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">
-                            {student.email}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveStudent(student.id, student.email)}
-                          disabled={actionLoading}
-                          className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
-                        >
-                          <TrashIcon size={18} weight="regular" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                  )
                 )}
               </div>
 

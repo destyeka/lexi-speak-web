@@ -175,7 +175,7 @@ export default function StudentClassPage() {
   }, [router]);
 
   const handleJoinClass = async () => {
-    const code = joinCode.trim();
+    const code = joinCode.trim().toLowerCase();
     if (!code) {
       setMessage("Masukkan kode kelas terlebih dahulu.");
       return;
