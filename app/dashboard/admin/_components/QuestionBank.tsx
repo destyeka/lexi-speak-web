@@ -19,7 +19,6 @@ import {
     PencilLineIcon,
     TrashIcon,
 } from "@phosphor-icons/react";
-import { title } from "process";
 
 const numberIcons = [
     NumberCircleOneIcon,
@@ -35,10 +34,36 @@ const numberIcons = [
 
 type Question = {
     id: string;
+    topic_code: string;
     title: string;
     part: number;
     prompt: string | null;
     is_active: boolean;
+    session: "practice" | "test";
+    category: string;
+    created_at: string | null;
+    seq: number;
+    category_code: string;
+    unit_id: string;
+};
+
+type Unit = {
+    id: string;
+
+    session_code: string;
+
+    title: string;
+
+    description: string | null;
+
+    type: "practice" | "test";
+
+    category: string;
+
+    access_level: "free" | "premium";
+
+    is_active: boolean;
+
     created_at: string | null;
 };
 
@@ -47,6 +72,7 @@ type Detail = {
     type: "question" | "bullet";
     content: string;
     order_index: number;
+    rubric?: string | null;
 };
 
 type QuestionBankProps = {
@@ -64,10 +90,15 @@ export default function QuestionBank({
 }: QuestionBankProps) {
     const router = useRouter();
     const [rows, setRows] = useState<Question[]>([]);
+    const [unitRows, setUnitRows] =
+        useState<Unit[]>([]);
     const [loading, setLoading] = useState(true);
     const [notice, setNotice] = useState("");
     const [isUnauthorized, setIsUnauthorized] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
+
+    const [activeTab, setActiveTab] =
+        useState<"units" | "topics">("units");
     const [pageSize, setPageSize] = useState<5 | 10>(5);
     const [currentPage, setCurrentPage] = useState(1);
 
@@ -78,6 +109,8 @@ export default function QuestionBank({
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     const [editTopic, setEditTopic] = useState<Question | null>(null);
+    const [editSession, setEditSession] = useState<"practice" | "test">("practice");
+    const [editCategory, setEditCategory] = useState("");
     const [editTitle, setEditTitle] = useState("");
     const [editPrompt, setEditPrompt] = useState("");
     const [editPart, setEditPart] = useState<number>(1);
@@ -87,12 +120,14 @@ export default function QuestionBank({
     const [isCreateOpen, setIsCreateOpen] = useState(false);
 
     const [newPart, setNewPart] = useState<number>(1);
+    const [newCategory, setNewCategory] = useState("");
+    const [newSession, setNewSession] = useState<"practice" | "test">("practice");
     const [newTitle, setNewTitle] = useState("");
     const [newPrompt, setNewPrompt] = useState("");
     const [newActive, setNewActive] = useState(true);
 
     const [newDetails, setNewDetails] = useState<
-        { type: "question" | "bullet"; content: string }[]
+        { type: "question" | "bullet"; content: string; rubric?: string | null }[]
     >([]);
 
     // Auto-generate structure when part changes
@@ -143,21 +178,68 @@ export default function QuestionBank({
                 return;
             }
 
-            const { data, error } = await supabase
-                .from("topics")
-                .select("id, part, title, prompt, is_active, created_at")
-                .order("created_at", { ascending: false });
+            if (activeTab === "topics") {
 
-            if (error) {
-                setNotice(error.message);
+                const { data, error } =
+                    await supabase
+                        .from("topics")
+                        .select(`
+        id,
+        topic_code,
+        category,
+        session,
+        part,
+        title,
+        prompt,
+        is_active,
+        created_at,
+        unit_id
+      `)
+                        .order("created_at", {
+                            ascending: false,
+                        });
+
+                if (error) {
+                    setNotice(error.message);
+                }
+
+                setRows(
+                    (data as Question[] | null) ?? []
+                );
+
+            } else {
+
+                const { data, error } =
+                    await supabase
+                        .from("session_units")
+                        .select(`
+        id,
+        session_code,
+        title,
+        description,
+        type,
+        category,
+        access_level,
+        is_active,
+        created_at
+      `)
+                        .order("created_at", {
+                            ascending: false,
+                        });
+
+                if (error) {
+                    setNotice(error.message);
+                }
+
+                setUnitRows(
+                    (data as Unit[] | null) ?? []
+                );
             }
-
-            setRows((data as Question[] | null) ?? []);
             setLoading(false);
         };
 
         void load();
-    }, [router]);
+    }, [router, activeTab]);
 
     useEffect(() => {
         setCurrentPage(1);
@@ -171,11 +253,41 @@ export default function QuestionBank({
         );
     }, [rows, searchTerm]);
 
-    const totalRows = filteredRows.length;
+    const filteredUnitRows = useMemo(() => {
+
+        const q =
+            searchTerm.toLowerCase();
+
+        return unitRows.filter(
+            (row) =>
+                row.title
+                    ?.toLowerCase()
+                    .includes(q) ||
+
+                row.session_code
+                    ?.toLowerCase()
+                    .includes(q)
+        );
+
+    }, [unitRows, searchTerm]);
+
+    const totalRows =
+        activeTab === "topics"
+            ? filteredRows.length
+            : filteredUnitRows.length;
     const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
     const safePage = Math.min(currentPage, pageCount);
     const startIndex = (safePage - 1) * pageSize;
-    const visibleRows = filteredRows.slice(startIndex, startIndex + pageSize);
+    const visibleRows =
+        activeTab === "topics"
+            ? filteredRows.slice(
+                startIndex,
+                startIndex + pageSize
+            )
+            : filteredUnitRows.slice(
+                startIndex,
+                startIndex + pageSize
+            );
     const startLabel = totalRows === 0 ? 0 : startIndex + 1;
     const endLabel = Math.min(startIndex + pageSize, totalRows);
 
@@ -206,12 +318,48 @@ export default function QuestionBank({
                 {notice ? <p className="mt-3 text-sm text-error-600">{notice}</p> : null}
             </div>
 
+            <div className="flex items-center gap-2">
+
+                <button
+                    onClick={() => setActiveTab("units")}
+                    className={`
+      rounded-2xl px-4 py-2 text-sm font-medium transition
+
+      ${activeTab === "units"
+                            ? "bg-[var(--primary)] text-white"
+                            : "bg-white text-gray-500 border border-gray-200 dark:bg-white/[0.03] dark:border-gray-800"
+                        }
+    `}
+                >
+                    Units
+                </button>
+
+                <button
+                    onClick={() => setActiveTab("topics")}
+                    className={`
+      rounded-2xl px-4 py-2 text-sm font-medium transition
+
+      ${activeTab === "topics"
+                            ? "bg-[var(--primary)] text-white"
+                            : "bg-white text-gray-500 border border-gray-200 dark:bg-white/[0.03] dark:border-gray-800"
+                        }
+    `}
+                >
+                    Topics
+                </button>
+
+            </div>
+
             <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4">
 
                 {/* LEFT CARD */}
                 <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
                     <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                        Total {summaryLabel}
+
+                        {activeTab === "topics"
+                            ? `Total ${summaryLabel}`
+                            : "Total Units"}
+
                     </p>
                     <p className="mt-2 text-2xl font-bold text-gray-800 dark:text-white/90">
                         {totalRows}
@@ -221,13 +369,13 @@ export default function QuestionBank({
                 {/* RIGHT CARD */}
                 <div className="inline-flex justify-between items-center rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
                     <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                        New Questions
+                        New Unit
                     </p>
                     <TextButton
                         variant="primary"
-                        onClick={() => setIsCreateOpen(true)}
+                        onClick={() => router.push("/dashboard/admin/question-bank/create")}
                     >
-                        Create Topic
+                        Create Unit
                     </TextButton>
                 </div>
 
@@ -267,14 +415,83 @@ export default function QuestionBank({
                     ) : (
                         <table className="min-w-full">
                             <thead>
-                                <tr className="border-b border-gray-100 dark:border-gray-800">
-                                    <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Part</th>
-                                    <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Title</th>
-                                    <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Prompt</th>
-                                    <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Status</th>
-                                    <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Created</th>
-                                    <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Actions</th>
-                                </tr>
+
+                                {activeTab === "topics" ? (
+
+                                    <tr className="border-b border-gray-100 dark:border-gray-800">
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Code
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Category
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Part
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Title
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Prompt
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Status
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Created
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Actions
+                                        </th>
+                                    </tr>
+
+                                ) : (
+
+                                    <tr className="border-b border-gray-100 dark:border-gray-800">
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Code
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Type
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Category
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Title
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Access
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Status
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Created
+                                        </th>
+
+                                        <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">
+                                            Actions
+                                        </th>
+                                    </tr>
+
+                                )}
+
                             </thead>
 
                             <tbody>
@@ -291,88 +508,267 @@ export default function QuestionBank({
                                         </td>
                                     </tr>
                                 ) : (
-                                    visibleRows.map((row) => (
-                                        <tr
-                                            key={row.id}
-                                            onClick={() => handleRowClick(row.id)}
-                                            className={`
-            cursor-pointer border-b last:border-0
-            hover:bg-gray-50 dark:hover:bg-white/5
-            ${selectedTopicId === row.id ? "bg-brand-50" : ""}
-          `}
-                                        >
-                                            <td className="px-5 py-4 text-sm font-medium">
-                                                Part {row.part}
-                                            </td>
+                                    activeTab === "topics" ? (
 
-                                            <td className="px-5 py-4 text-sm">
-                                                {row.title || "-"}
-                                            </td>
+                                        (visibleRows as Question[]).map((row) => (
 
-                                            <td className="px-5 py-4 text-sm">
-                                                {row.prompt || "-"}
-                                            </td>
+                                            <tr
+                                                key={row.id}
+                                                onClick={() =>
+                                                    handleRowClick(row.id)
+                                                }
+                                                className={`
+        cursor-pointer border-b last:border-0
+        hover:bg-gray-50 dark:hover:bg-white/5
+      `}
+                                            >
 
-                                            <td className="px-5 py-4 text-sm">
-                                                {row.is_active ? "Active" : "Inactive"}
-                                            </td>
+                                                <td className="px-5 py-4 text-sm font-medium">
+                                                    {row.topic_code}
+                                                </td>
 
-                                            <td className="px-5 py-4 text-sm text-gray-500">
-                                                {row.created_at
-                                                    ? new Date(row.created_at).toLocaleDateString()
-                                                    : "-"}
-                                            </td>
-                                            <td className="px-5 py-4 text-sm flex gap-2">
-                                                {/* EDIT */}
-                                                <button
-                                                    onClick={async (e) => {
-                                                        e.stopPropagation();
+                                                <td className="px-5 py-4 text-sm font-medium">
+                                                    {row.category}
+                                                </td>
 
-                                                        setEditTopic(row);
-                                                        setEditTitle(row.title);
-                                                        setEditPrompt(row.prompt || "");
-                                                        setEditPart(row.part);
-                                                        setEditActive(row.is_active);
+                                                <td className="px-5 py-4 text-sm font-medium">
+                                                    Part {row.part}
+                                                </td>
 
-                                                        const { data } = await supabase
-                                                            .from("topic_details")
-                                                            .select("*")
-                                                            .eq("topic_id", row.id)
-                                                            .order("order_index");
+                                                <td className="px-5 py-4 text-sm">
+                                                    {row.title || "-"}
+                                                </td>
 
-                                                        setEditDetails(data || []);
-                                                    }}
-                                                    className="text-[var(--color-warning-text)] hover:text-[var(--color-warning-bg)]"
-                                                >
-                                                    <PencilLineIcon size={18} weight="fill" />
-                                                </button>
+                                                <td className="px-5 py-4 text-sm">
+                                                    {row.prompt || "-"}
+                                                </td>
 
-                                                {/* DELETE */}
-                                                <button
-                                                    onClick={async (e) => {
-                                                        e.stopPropagation();
+                                                <td className="px-5 py-4 text-sm">
+                                                    {row.is_active
+                                                        ? "Active"
+                                                        : "Inactive"}
+                                                </td>
 
-                                                        const confirmDelete = confirm("Delete this topic?");
-                                                        if (!confirmDelete) return;
+                                                <td className="px-5 py-4 text-sm text-gray-500">
+                                                    {row.created_at
+                                                        ? new Date(
+                                                            row.created_at
+                                                        ).toLocaleDateString()
+                                                        : "-"}
+                                                </td>
 
-                                                        const { error } = await supabase
-                                                            .from("topics")
-                                                            .delete()
-                                                            .eq("id", row.id);
+                                                <td className="px-5 py-4 text-sm">
+                                                    <div className="flex items-center gap-2">
 
-                                                        if (!error) {
-                                                            setRows((prev) => prev.filter((r) => r.id !== row.id));
-                                                        } else {
-                                                            alert(error.message);
-                                                        }
-                                                    }}
-                                                    className="text-[var(--color-error-text)] hover:text-[var(--color-error-bg)]"
-                                                >
-                                                    <TrashIcon size={18} weight="fill"/>
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))
+                                                        {/* EDIT */}
+                                                        <button
+                                                            onClick={(e) => {
+
+                                                                e.stopPropagation();
+
+                                                                router.push(
+                                                                    `/dashboard/admin/question-bank/${row.unit_id}/edit`
+                                                                );
+                                                            }}
+                                                            className="text-[var(--color-warning-text)] hover:text-[var(--color-warning-bg)]"
+                                                        >
+                                                            <PencilLineIcon
+                                                                size={18}
+                                                                weight="fill"
+                                                            />
+                                                        </button>
+
+                                                        {/* DELETE SESSION */}
+                                                        <button
+                                                            onClick={async (e) => {
+
+                                                                e.stopPropagation();
+
+                                                                const confirmDelete =
+                                                                    confirm(
+                                                                        "Delete this entire session?"
+                                                                    );
+
+                                                                if (!confirmDelete)
+                                                                    return;
+
+                                                                const { error } =
+                                                                    await supabase
+                                                                        .from("session_units")
+                                                                        .delete()
+                                                                        .eq(
+                                                                            "id",
+                                                                            row.unit_id
+                                                                        );
+
+                                                                if (!error) {
+
+                                                                    setRows((prev) =>
+                                                                        prev.filter(
+                                                                            (r) =>
+                                                                                r.unit_id !==
+                                                                                row.unit_id
+                                                                        )
+                                                                    );
+
+                                                                    setCurrentPage(1);
+
+                                                                } else {
+
+                                                                    alert(error.message);
+                                                                }
+                                                            }}
+                                                            className="text-[var(--color-error-text)] hover:text-[var(--color-error-bg)]"
+                                                        >
+                                                            <TrashIcon
+                                                                size={18}
+                                                                weight="fill"
+                                                            />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+
+                                    ) : (
+
+                                        (visibleRows as Unit[]).map((row) => (
+
+                                            <tr
+                                                key={row.id}
+
+                                                onClick={() =>
+                                                    router.push(
+                                                        `/dashboard/admin/question-bank/${row.id}`
+                                                    )
+                                                }
+
+                                                className={`
+        cursor-pointer border-b last:border-0
+        hover:bg-gray-50 dark:hover:bg-white/5
+      `}
+                                            >
+
+                                                <td className="px-5 py-4 text-sm font-medium">
+                                                    {row.session_code}
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm">
+
+                                                    <span
+                                                        className={`
+      inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase
+
+      ${row.type === "practice"
+                                                                ? "bg-green-100 text-green-700 dark:bg-green-500/10 dark:text-green-400"
+                                                                : "bg-yellow-100 text-yellow-700 dark:bg-yellow-500/10 dark:text-yellow-400"
+                                                            }
+    `}
+                                                    >
+                                                        {row.type}
+                                                    </span>
+
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm">
+                                                    {row.category}
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm">
+                                                    {row.title}
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm uppercase">
+                                                    {row.access_level}
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm">
+                                                    {row.is_active
+                                                        ? "Active"
+                                                        : "Inactive"}
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm text-gray-500">
+                                                    {row.created_at
+                                                        ? new Date(
+                                                            row.created_at
+                                                        ).toLocaleDateString()
+                                                        : "-"}
+                                                </td>
+
+                                                <td className="px-5 py-4 text-sm">
+
+                                                    <div className="flex items-center gap-2">
+
+                                                        {/* EDIT */}
+                                                        <button
+                                                            onClick={(e) => {
+
+                                                                e.stopPropagation();
+
+                                                                router.push(
+                                                                    `/dashboard/admin/question-bank/${row.id}/edit`
+                                                                );
+                                                            }}
+                                                            className="text-[var(--color-warning-text)] hover:text-[var(--color-warning-bg)]"
+                                                        >
+                                                            <PencilLineIcon
+                                                                size={18}
+                                                                weight="fill"
+                                                            />
+                                                        </button>
+
+                                                        {/* DELETE */}
+                                                        <button
+                                                            onClick={async (e) => {
+
+                                                                e.stopPropagation();
+
+                                                                const confirmDelete =
+                                                                    confirm(
+                                                                        "Delete this session?"
+                                                                    );
+
+                                                                if (!confirmDelete)
+                                                                    return;
+
+                                                                const { error } =
+                                                                    await supabase
+                                                                        .from("session_units")
+                                                                        .delete()
+                                                                        .eq("id", row.id);
+
+                                                                if (!error) {
+
+                                                                    setUnitRows((prev) =>
+                                                                        prev.filter(
+                                                                            (r) =>
+                                                                                r.id !== row.id
+                                                                        )
+                                                                    );
+
+                                                                    setCurrentPage(1);
+
+
+                                                                } else {
+
+                                                                    alert(error.message);
+                                                                }
+                                                            }}
+                                                            className="text-[var(--color-error-text)] hover:text-[var(--color-error-bg)]"
+                                                        >
+                                                            <TrashIcon
+                                                                size={18}
+                                                                weight="fill"
+                                                            />
+                                                        </button>
+                                                    </div>
+                                                </td>
+
+                                            </tr>
+                                        ))
+
+                                    )
                                 )}
                             </tbody>
                         </table>
@@ -426,7 +822,7 @@ export default function QuestionBank({
                 ) : null}
             </div>
             {isModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-black/40">
                     <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-lg">
 
                         {/* HEADER */}
@@ -500,27 +896,15 @@ export default function QuestionBank({
                         <div className="mt-6 flex justify-end gap-2">
                             <TextButton
                                 variant="secondary"
-                                onClick={async () => {
-                                    if (!selectedTopic) return;
 
-                                    // 🔥 close view modal
-                                    setIsModalOpen(false);
+                                onClick={() => {
 
-                                    // 🔥 open edit modal
-                                    setEditTopic(selectedTopic);
-                                    setEditTitle(selectedTopic.title);
-                                    setEditPrompt(selectedTopic.prompt || "");
-                                    setEditPart(selectedTopic.part);
-                                    setEditActive(selectedTopic.is_active);
+                                    if (!selectedTopic)
+                                        return;
 
-                                    // 🔥 fetch details
-                                    const { data } = await supabase
-                                        .from("topic_details")
-                                        .select("*")
-                                        .eq("topic_id", selectedTopic.id)
-                                        .order("order_index");
-
-                                    setEditDetails(data || []);
+                                    router.push(
+                                        `/dashboard/admin/question-bank/${selectedTopic.unit_id}/edit`
+                                    );
                                 }}
                             >
                                 Edit
@@ -535,366 +919,6 @@ export default function QuestionBank({
                     </div>
                 </div>
             )}
-            {editTopic && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                    <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-lg">
-
-                        <h3 className="text-lg font-semibold mb-4">Edit Topic</h3>
-
-                        {/* PART */}
-                        <div className="w-full p-3 mb-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl">
-                            <select
-                                value={editPart}
-                                onChange={(e) => setEditPart(Number(e.target.value))}
-                                className="w-full outline-none bg-transparent"
-                            >
-                                <option value={1}>Part 1</option>
-                                <option value={2}>Part 2</option>
-                                <option value={3}>Part 3</option>
-                            </select>
-                        </div>
-
-                        {/* TITLE */}
-                        <label htmlFor="editTitle" className="w-full block text-base font-bold text-primary">
-                            Title
-                            <InputField
-                                className="flex-1 min-w-0 mt-2 my-3"
-                                value={editTitle}
-                                onChange={(v) => setEditTitle(v)}
-                                placeholder="Title"
-                            />
-                        </label>
-
-                        {/* PROMPT */}
-                        <label htmlFor="editPrompt" className="w-full block text-base font-bold text-primary">
-                            Prompt
-                            <InputField
-                                className="flex-1 min-w-0 mt-2 my-3"
-                                value={editPrompt}
-                                onChange={(v) => setEditPrompt(v)}
-                                placeholder="Prompt"
-                            />
-                        </label>
-
-                        {/* ACTIVE */}
-                        <div className="flex items-center justify-between mb-4">
-                            <span className="text-sm font-medium">Activate topic</span>
-
-                            <Toggle
-                                checked={editActive}
-                                onChange={(v) => setEditActive(v)}
-                            />
-                        </div>
-
-
-                        {/* DETAILS */}
-                        <div className="space-y-2 mb-4">
-                            {editDetails.map((d, i) => (
-                                <div key={d.id ?? i} className="flex gap-2">
-
-                                    {/* TYPE */}
-                                    <div className="mx-auto p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl flex items-center">
-                                        <select
-                                            value={d.type}
-                                            onChange={(e) => {
-                                                const updated = [...editDetails];
-                                                updated[i].type = e.target.value as any;
-                                                setEditDetails(updated);
-                                            }}
-                                            className="bg-transparent outline-none w-full"
-                                        >
-                                            <option value="question">Question</option>
-                                            <option value="bullet">Bullet</option>
-                                        </select>
-                                    </div>
-
-                                    {/* CONTENT */}
-                                    <InputField
-                                        className="flex-1"
-                                        value={d.content}
-                                        onChange={(v) => {
-                                            const updated = [...editDetails];
-                                            updated[i].content = v;
-                                            setEditDetails(updated);
-                                        }}
-                                        placeholder="Content"
-                                    />
-
-                                    {/* DELETE */}
-                                    <button
-                                        onClick={() => {
-                                            setEditDetails((prev) =>
-                                                prev
-                                                    .filter((_, idx) => idx !== i)
-                                                    .map((d, index) => ({
-                                                        ...d,
-                                                        order_index: index,
-                                                    }))
-                                            );
-                                        }}
-                                        className="text-red-500"
-                                    >
-                                        ✕
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* ADD DETAIL */}
-                        <button
-                            onClick={() =>
-                                setEditDetails((prev) => [
-                                    ...prev,
-                                    {
-                                        type: "question",
-                                        content: "",
-                                        order_index: prev.length, // 🔥 important
-                                    },
-                                ])
-                            }
-                            className="mb-4 text-primary"
-                        >
-                            Add Detail
-                        </button>
-
-                        {/* ACTIONS */}
-                        <div className="flex justify-end gap-2">
-                            <TextButton
-                                variant="secondary"
-                                onClick={() => setEditTopic(null)}
-                            >
-                                Cancel
-                            </TextButton>
-
-
-                            <TextButton
-                                variant="primary"
-                                onClick={async () => {
-                                    const { error } = await supabase
-                                        .from("topics")
-                                        .update({
-                                            part: editPart,
-                                            title: editTitle,
-                                            prompt: editPrompt,
-                                            is_active: editActive,
-                                        })
-                                        .eq("id", editTopic.id);
-
-                                    if (error) {
-                                        alert(error.message);
-                                        return;
-                                    }
-
-                                    await supabase
-                                        .from("topic_details")
-                                        .delete()
-                                        .eq("topic_id", editTopic.id);
-
-                                    if (editDetails.length > 0) {
-                                        await supabase.from("topic_details").insert(
-                                            editDetails.map((d) => ({
-                                                topic_id: editTopic.id,
-                                                type: d.type,
-                                                content: d.content,
-                                                order_index: d.order_index, // 🔥 USE EXISTING ORDER
-                                            }))
-                                        );
-                                    }
-
-                                    setRows((prev) =>
-                                        prev.map((r) =>
-                                            r.id === editTopic.id
-                                                ? {
-                                                    ...r,
-                                                    part: editPart,
-                                                    title: editTitle,
-                                                    prompt: editPrompt,
-                                                    is_active: editActive,
-                                                }
-                                                : r
-                                        )
-                                    );
-
-                                    // 🔥 5. reset
-                                    setEditTopic(null);
-                                    setEditDetails([]);
-                                }}
-                            >
-                                Save
-                            </TextButton>
-                        </div>
-                    </div>
-                </div>
-            )
-            }
-
-            {
-                isCreateOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                        <div
-                            className="w-full max-w-lg rounded-2xl bg-white p-6"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <h3 className="text-lg font-semibold mb-4">Create Topic</h3>
-
-                            {/* PART */}
-                            <div className="w-full p-3 mb-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl">
-                                <select
-                                    value={newPart}
-                                    onChange={(e) => setNewPart(Number(e.target.value))}
-                                    className="w-full outline-none bg-transparent"
-                                >
-                                    <option value={1}>Part 1</option>
-                                    <option value={2}>Part 2</option>
-                                    <option value={3}>Part 3</option>
-                                </select>
-                            </div>
-
-                            <label htmlFor="newTitle" className="w-full block text-base font-bold text-primary">
-                                Title
-                                <InputField
-                                    className="flex-1 min-w-0 mt-2 my-3"
-                                    value={newTitle}
-                                    onChange={(v) => setNewTitle(v)}
-                                    placeholder="Title"
-                                />
-                            </label>
-
-                            {/* PROMPT */}
-                            <label htmlFor="newPrompt" className="w-full block text-base font-bold text-primary">
-                                Prompt
-                                <InputField
-                                    className="flex-1 min-w-0 mt-2 my-3"
-                                    value={newPrompt}
-                                    onChange={(v) => setNewPrompt(v)}
-                                    placeholder="Prompt"
-                                />
-                            </label>
-
-                            {/* ACTIVE */}
-                            <div className="flex items-center justify-between mb-4">
-                                <span className="text-sm font-medium">Activate topic</span>
-
-                                <Toggle
-                                    checked={newActive}
-                                    onChange={(v) => setNewActive(v)}
-                                />
-                            </div>
-
-                            {/* DETAILS */}
-                            <div className="space-y-2 mb-4">
-                                {newDetails.map((d, i) => (
-                                    <div key={i} className="flex gap-2">
-                                        <div className="mx-auto p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl flex items-center">
-                                            <select
-                                                value={d.type}
-                                                onChange={(e) => {
-                                                    const updated = [...newDetails];
-                                                    updated[i].type = e.target.value as any;
-                                                    setNewDetails(updated);
-                                                }}
-                                                className="bg-transparent outline-none w-full"
-                                            >
-                                                <option value="question">Question</option>
-                                                <option value="bullet">Bullet</option>
-                                            </select>
-                                        </div>
-
-                                        <InputField
-                                            className="flex-1"
-                                            value={d.content}
-                                            onChange={(v) => {
-                                                const updated = [...newDetails];
-                                                updated[i].content = v;
-                                                setNewDetails(updated);
-                                            }}
-                                            placeholder="Content"
-                                        />
-
-                                        <button
-                                            onClick={() =>
-                                                setNewDetails((prev) => prev.filter((_, idx) => idx !== i))
-                                            }
-                                            className="text-red-500"
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-
-                            {/* ADD DETAIL */}
-                            <button
-                                onClick={() =>
-                                    setNewDetails((prev) => [
-                                        ...prev,
-                                        {
-                                            type: "question",
-                                            content: "",
-                                            order_index: prev.length,
-                                        },
-                                    ])
-                                }
-
-                                className="text-primary my-4"
-                            >
-                                Add Detail
-                            </button>
-
-                            {/* ACTIONS */}
-                            <div className="flex justify-end gap-2">
-                                <TextButton
-                                    variant="secondary"
-                                    onClick={() => setIsCreateOpen(false)}
-                                >
-                                    Cancel
-                                </TextButton>
-                                <TextButton
-                                    variant="primary"
-                                    onClick={async () => {
-                                        const { data: topic, error } = await supabase
-                                            .from("topics")
-                                            .insert({
-                                                part: newPart,
-                                                title: newTitle,
-                                                prompt: newPrompt,
-                                                is_active: newActive,
-                                            })
-                                            .select()
-                                            .single();
-
-                                        if (error) {
-                                            alert(error.message);
-                                            return;
-                                        }
-
-                                        if (newDetails.length > 0) {
-                                            await supabase.from("topic_details").insert(
-                                                newDetails.map((d, i) => ({
-                                                    topic_id: topic.id,
-                                                    type: d.type,
-                                                    content: d.content,
-                                                    order_index: i,
-                                                }))
-                                            );
-                                        }
-
-                                        setRows((prev) => [topic, ...prev]);
-
-                                        setIsCreateOpen(false);
-                                        setNewPrompt("");
-                                        setNewPart(1);
-                                        setNewActive(true);
-                                        setNewDetails([]);
-                                    }}
-                                >
-                                    Create
-                                </TextButton>
-                            </div>
-                        </div>
-                    </div>
-                )
-            }
         </section >
     );
 }

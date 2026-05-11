@@ -325,6 +325,22 @@
   will-change: transform;
 }
 
+.text-warning {
+  color: var(--color-warning-text);
+}
+
+.text-error {
+  color: var(--color-error-text);
+}
+
+.text-success {
+  color: var(--color-success-text);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
 .floating-chip-2 {
   animation: chip-float-2 2.9s ease-in-out infinite;
   animation-delay: 0.22s;
