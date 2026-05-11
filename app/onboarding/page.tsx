@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
@@ -762,7 +763,7 @@ const getAdaptiveEncouragement = (transcript: string, promptText: string) => {
   return null;
 };
 
-export default function Home() {
+function HomeContent() {
   const router = useRouter();
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -2685,5 +2686,13 @@ Describe a topic that feels useful for your current level (${speakingLevel}) and
         }
       `}</style>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <HomeContent />
+    </Suspense>
   );
 }
