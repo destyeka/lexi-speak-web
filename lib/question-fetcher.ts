@@ -112,3 +112,59 @@ export async function getRandomTopicsFromPart(
 
   return shuffled.slice(0, Math.min(count, shuffled.length));
 }
+
+/**
+ * Get topics by unit identifier. The unitId may be a numeric part ("1", "2")
+ * or a UUID for a unit record. This helper tries to be tolerant and will
+ * delegate to `getTopicsByPart` when `unitId` looks like a small integer.
+ */
+export async function getTopicsByUnit(unitId: string | null): Promise<Topic[]> {
+  if (!unitId) return [];
+
+  // If unitId is a small integer string, treat it as part number
+  const asNum = parseInt(unitId, 10);
+  if (!isNaN(asNum) && String(asNum) === unitId) {
+    return await getTopicsByPart(asNum);
+  }
+
+  try {
+    const { data: topics, error } = await supabase
+      .from("topics")
+      .select(
+        `
+        id,
+        part,
+        title,
+        prompt,
+        is_active,
+        created_at,
+        topic_details (
+          id,
+          type,
+          content,
+          order_index
+        )
+      `,
+      )
+      .eq("unit_id", unitId)
+      .eq("is_active", true)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("Error fetching topics by unit:", error);
+      return [];
+    }
+
+    return (
+      topics?.map((topic) => ({
+        ...topic,
+        details: (topic.topic_details || []).sort(
+          (a, b) => (a.order_index || 0) - (b.order_index || 0),
+        ),
+      })) || []
+    );
+  } catch (error) {
+    console.error("Error fetching topics by unit:", error);
+    return [];
+  }
+}

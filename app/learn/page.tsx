@@ -1,6 +1,13 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
+import {
+  getBulletsFromTopic,
+  getQuestionsFromTopic,
+  getTopicsByUnit,
+  type Topic,
+} from "@/lib/question-fetcher";
 
 interface PageMap {
   INTRO: "intro";
@@ -9,6 +16,9 @@ interface PageMap {
   PART2_INTRO: "part2_intro";
   PART2_SESSION: "part2_session";
   PART2_RESULT: "part2_result";
+  PART3_INTRO: "part3_intro";
+  PART3_SESSION: "part3_session";
+  PART3_RESULT: "part3_result";
 }
 interface ChatMessage { role: string; text: string; }
 
@@ -68,20 +78,31 @@ const PAGES: PageMap = {
   PART2_INTRO: "part2_intro",
   PART2_SESSION: "part2_session",
   PART2_RESULT: "part2_result"
+  ,PART3_INTRO: "part3_intro",
+  PART3_SESSION: "part3_session",
+  PART3_RESULT: "part3_result"
 };
+
+type PageValue = PageMap[keyof PageMap];
 
 const PulseRing = ({ color = "#ef4444", size = 180 }: { color?: string; size?: number }) => (
   <div style={{ position: "absolute", width: size, height: size, borderRadius: "50%", background: `radial-gradient(circle, ${color}33 0%, ${color}11 50%, transparent 75%)`, animation: "pulseGlow 2.5s ease-in-out infinite", pointerEvents: "none" }} />
 );
 
 export default function LexaPracticeSession() {
-  const [page, setPage] = useState(PAGES.INTRO);
+  const searchParams = useSearchParams();
+  const [page, setPage] = useState<PageValue>(PAGES.INTRO);
   const [time, setTime] = useState(0);
   const [isListening, setIsListening] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
   const [interimTranscript, setInterimTranscript] = useState("");
   const [liveTranscript, setLiveTranscript] = useState("");
+  const [sessionTopics, setSessionTopics] = useState<Topic[]>([]);
+  const [isTopicsLoading, setIsTopicsLoading] = useState(false);
+
+  // PART 3 state (mirip Part 1)
+  const [transcriptPart3, setTranscriptPart3] = useState("");
 
   // PERBAIKAN 1: Pisah state transkrip agar Part 1 tidak terhapus oleh Part 2
   const [transcriptPart1, setTranscriptPart1] = useState("");
@@ -91,6 +112,61 @@ export default function LexaPracticeSession() {
     { role: "lexa", text: "Good morning, my name is Lexa. What's your name?" },
   ]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const unitId = searchParams.get("unit");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTopics = async () => {
+      if (!unitId) {
+        setSessionTopics([]);
+        setIsTopicsLoading(false);
+        return;
+      }
+
+      setIsTopicsLoading(true);
+      const topics = await getTopicsByUnit(unitId);
+
+      if (!cancelled) {
+        setSessionTopics(topics);
+        setIsTopicsLoading(false);
+      }
+    };
+
+    loadTopics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [unitId]);
+
+  const part1Topic = sessionTopics.find((topic) => topic.part === 1) ?? null;
+  const part2Topic = sessionTopics.find((topic) => topic.part === 2) ?? null;
+  const part3Topic = sessionTopics.find((topic) => topic.part === 3) ?? null;
+
+  const part3Questions = part3Topic ? getQuestionsFromTopic(part3Topic) : [];
+  const part3Bullets = part3Topic ? getBulletsFromTopic(part3Topic) : [];
+
+  const part3Messages = part3Topic
+    ? [
+        {
+          role: "lexa",
+          text: `We’ve moved on to Part 3. Let’s discuss ${part3Topic.title}.`,
+        },
+        {
+          role: "lexa",
+          text: part3Topic.prompt
+            ? part3Topic.prompt
+            : "I’ll ask more abstract questions related to this topic.",
+        },
+      ]
+    : [
+        {
+          role: "lexa",
+          text: "We’ve moved on to Part 3. I’ll ask more abstract follow-up questions.",
+        },
+      ];
 
   const startSession = () => {
     setTime(5 * 60);
@@ -114,6 +190,18 @@ export default function LexaPracticeSession() {
     setPage(PAGES.PART2_SESSION);
   };
 
+  const startPart3Session = () => {
+    // Part 3 UI should mirror Part 1 (longer turn)
+    setTime(5 * 60);
+    setIsListening(true);
+    setIsRecording(false);
+    setRecError(null);
+    setInterimTranscript("");
+    setTranscriptPart3("");
+    setLiveTranscript("");
+    setPage(PAGES.PART3_SESSION);
+  };
+
   // PERBAIKAN 2: Tangkap sisa teks interim sebelum berpindah ke halaman result
   const finishSession = () => {
     setIsListening(false);
@@ -121,7 +209,12 @@ export default function LexaPracticeSession() {
     
     const remainingText = liveTranscript.trim() || interimTranscript.trim();
 
-    if (page === PAGES.PART2_SESSION) {
+    if (page === PAGES.PART3_SESSION) {
+      if (remainingText && !transcriptPart3.includes(remainingText)) {
+        setTranscriptPart3((prev) => (prev + " " + remainingText).trim());
+      }
+      setPage(PAGES.PART3_RESULT);
+    } else if (page === PAGES.PART2_SESSION) {
       if (remainingText && !transcriptPart2.includes(remainingText)) {
         setTranscriptPart2((prev) => (prev + " " + remainingText).trim());
       }
@@ -144,12 +237,13 @@ export default function LexaPracticeSession() {
     setInterimTranscript("");
     setTranscriptPart1("");
     setTranscriptPart2("");
+    setTranscriptPart3("");
     setLiveTranscript("");
     setPage(PAGES.INTRO);
   };
 
   useEffect(() => {
-    if (page === PAGES.SESSION || page === PAGES.PART2_SESSION) {
+    if (page === PAGES.SESSION || page === PAGES.PART2_SESSION || page === PAGES.PART3_SESSION) {
       intervalRef.current = setInterval(() => {
         setTime((t) => (t > 0 ? t - 1 : 0));
       }, 1000);
@@ -165,10 +259,14 @@ export default function LexaPracticeSession() {
     return `${m}:${ss}`;
   };
 
-  const timerGreen = page === PAGES.SESSION || page === PAGES.PART2_SESSION;
-  const headerTitle = page.startsWith("part2") ? "Practice Unit 1 – Part 2 (Cue Card)" : "Practice Unit 1 – Part 1 (Introduction)";
-  
-  const currentTranscript = page.startsWith("part2") ? transcriptPart2 : transcriptPart1;
+  const timerGreen = page === PAGES.SESSION || page === PAGES.PART2_SESSION || page === PAGES.PART3_SESSION;
+  const headerTitle = page.startsWith("part2")
+    ? `Practice Unit 1 – Part 2${part2Topic?.title ? ` (${part2Topic.title})` : " (Cue Card)"}`
+    : page.startsWith("part3")
+      ? `Practice Unit 1 – Part 3${part3Topic?.title ? ` (${part3Topic.title})` : " (Introduction)"}`
+      : `Practice Unit 1 – Part 1${part1Topic?.title ? ` (${part1Topic.title})` : " (Introduction)"}`;
+
+  const currentTranscript = page.startsWith("part2") ? transcriptPart2 : page.startsWith("part3") ? transcriptPart3 : transcriptPart1;
   const hasSpoken = Boolean(currentTranscript.trim() || liveTranscript.trim() || interimTranscript.trim());
 
   return (
@@ -179,6 +277,7 @@ export default function LexaPracticeSession() {
         <button style={styles.backBtn} onClick={() => {
           if (page === PAGES.SESSION) setPage(PAGES.INTRO);
           if (page === PAGES.PART2_SESSION) setPage(PAGES.PART2_INTRO);
+          if (page === PAGES.PART3_SESSION) setPage(PAGES.PART3_INTRO);
         }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 18l-6-6 6-6" />
@@ -186,8 +285,8 @@ export default function LexaPracticeSession() {
         </button>
         <span style={styles.headerTitle}>{headerTitle}</span>
         <div style={styles.headerRight}>
-          {(page === PAGES.RESULT || page === PAGES.PART2_RESULT) && (
-            <button onClick={page === PAGES.PART2_RESULT ? startPart2Session : startSession} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", padding: 4, marginRight: 8 }} title="Restart Session">
+          {(page === PAGES.RESULT || page === PAGES.PART2_RESULT || page === PAGES.PART3_RESULT) && (
+            <button onClick={page === PAGES.PART3_RESULT ? startPart3Session : page === PAGES.PART2_RESULT ? startPart2Session : startSession} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", padding: 4, marginRight: 8 }} title="Restart Session">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
               </svg>
@@ -214,6 +313,17 @@ export default function LexaPracticeSession() {
           <SessionPagePart2 isRecording={isRecording} setIsRecording={setIsRecording} transcript={transcriptPart2} setTranscript={setTranscriptPart2} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} recError={recError} setRecError={setRecError} isListening={isListening} />
         )}
         {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} />}
+        {page === PAGES.PART3_INTRO && (
+          <IntroPagePart3
+            topic={part3Topic}
+            bullets={part3Bullets}
+            isLoading={isTopicsLoading}
+          />
+        )}
+        {page === PAGES.PART3_SESSION && (
+          <SessionPage messages={part3Messages} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart3} setTranscript={setTranscriptPart3} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} />
+        )}
+        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} />}
       </main>
 
       {/* Footer Utama */}
@@ -236,7 +346,18 @@ export default function LexaPracticeSession() {
             <button style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#C95B5B", fontWeight: 600, padding: "10px 0" }} onClick={restartSession}>
               Save Progress
             </button>
-            <button style={{ ...styles.startBtn, background: "linear-gradient(135deg, #f87171, #ef4444)" }} onClick={() => alert("Selesai! Seluruh sesi latihan berhasil disimpan.")}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={{ ...styles.startBtn, background: "linear-gradient(135deg, #f87171, #ef4444)" }} onClick={() => { setPage(PAGES.PART3_INTRO); setLiveTranscript(""); setInterimTranscript(""); }}>
+                Save &amp; Go to Part 3
+              </button>
+            </div>
+          </>
+        ) : page === PAGES.PART3_RESULT ? (
+          <>
+            <button style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#C95B5B", fontWeight: 600, padding: "10px 0" }} onClick={restartSession}>
+              Save Progress
+            </button>
+            <button style={{ ...styles.startBtn, background: "linear-gradient(135deg, #f87171, #ef4444)" }} onClick={() => alert("Selesai! Seluruh sesi latihan berhasil disimpan.") }>
               Save &amp; Finish All
             </button>
           </>
@@ -247,6 +368,8 @@ export default function LexaPracticeSession() {
               <button style={styles.startBtn} onClick={startSession}>Start Session</button>
             ) : page === PAGES.PART2_INTRO ? (
               <button style={styles.startBtn} onClick={startPart2Session}>Start Session</button>
+            ) : page === PAGES.PART3_INTRO ? (
+              <button style={styles.startBtn} onClick={startPart3Session}>Start Session</button>
             ) : (
               <button style={hasSpoken ? styles.startBtn : { ...styles.startBtn, background: "#d1d5db", color: "#9ca3af", boxShadow: "none", cursor: "not-allowed" }} onClick={hasSpoken ? finishSession : undefined} disabled={!hasSpoken} >
                 Finish Session
@@ -301,8 +424,36 @@ function IntroPagePart2() {
   );
 }
 
+function IntroPagePart3({
+  topic,
+}: {
+  topic: Topic | null;
+}) {
+  const topicTitle = topic?.title ?? "Part 3 Discussion";
+  const topicPrompt = topic?.prompt ?? "I will ask you some follow-up questions related to this topic.";
+
+  return (
+    <div style={styles.chat}>
+      <div style={styles.lexaBubbleWrap}>
+        <LexaAvatar />
+        <div>
+          <div style={styles.lexaName}>Lexa – AI Coach</div>
+          <div style={styles.lexaBubble}> Hello! This is Part 3 — let&apos;s discuss <strong>{topicTitle}</strong> first! </div>
+        </div>
+      </div>
+      <div style={styles.contentAlign}>
+        <p style={styles.instructionLabel}>Please carefully read the instructions below before proceed the practice session</p>
+        <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>{topicPrompt}</span></div>
+        <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>You will have to speak for the total of <strong>4–5 minutes</strong> for this part.</span></div>
+        <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Be natural and keep answers concise but informative.</span></div>
+      </div>
+    </div>
+  );
+}
+
 function SessionPage({ messages, isRecording, setIsRecording, recError, setRecError, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript }: SessionPageProps) {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const isStoppingRef = useRef(false);
   
   const startRecording = async () => {
     setRecError(null);
@@ -311,7 +462,17 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     setInterimTranscript("");
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) throw new Error("Browser tidak mendukung Live Transcription.");
-    
+
+    // Jika ada instance sebelumnya, hentikan/abort dulu untuk menghindari konflik
+    if (recognitionRef.current) {
+      try {
+        isStoppingRef.current = true;
+        recognitionRef.current.abort();
+      } catch {}
+      recognitionRef.current = null;
+      isStoppingRef.current = false;
+    }
+
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
     recognition.continuous = true;
@@ -339,12 +500,17 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     };
 
     recognition.onerror = (e: SpeechRecognitionErrorEventLike) => {
+      // Abaikan error 'aborted' yang di-trigger saat menghentikan/abort
+      if (e.error === "aborted") return;
       if (e.error !== "no-speech") setRecError(`Error: ${e.error}`);
     };
 
     recognition.onend = () => {
-      if (recognitionRef.current) {
+      // Jika tidak sedang berhenti sengaja, coba restart agar continuous listening tetap bekerja.
+      if (recognitionRef.current && !isStoppingRef.current) {
         try { recognition.start(); } catch {}
+      } else {
+        setIsRecording(false);
       }
     };
 
@@ -356,10 +522,11 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     setIsRecording(false);
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.onend = null;
+        isStoppingRef.current = true;
         recognitionRef.current.abort();
       } catch (err) { console.log(err); }
       recognitionRef.current = null;
+      isStoppingRef.current = false;
     }
   };
 
@@ -367,8 +534,9 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.onend = null;
-        try { recognitionRef.current.abort(); } catch {}
+        try { isStoppingRef.current = true; recognitionRef.current.abort(); } catch {}
         recognitionRef.current = null;
+        isStoppingRef.current = false;
         setIsRecording(false);
       }
     };
@@ -405,7 +573,7 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
   );
 }
 
-function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRefError }) {
+function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRecError }: SessionPagePart2Props) {
   const recognitionRef = useRef<any>(null);
   const [isFlipped, setIsFlipped] = useState(false);
 
@@ -425,7 +593,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   }, []);
 
   const startRecording = async () => {
-    if (typeof setRefError === "function") setRefError(null);
+    setRecError(null);
     setTranscript(""); setLiveTranscript(""); setInterimTranscript("");
     
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -554,7 +722,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
                 "Explain why it is so important to you"
               ].map((text, idx) => (
                 <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: "20px", padding: "6px 16px", color: "#C95B5B", fontSize: "14px", fontWeight: "500" }}>
-                  <span style={{ display: "flex", alignItems: "center", justifyBox: "center", border: "1px solid #C95B5B", borderRadius: "50%", width: "16px", height: "16px", fontSize: "11px", fontWeight: "700", justifyContent: "center" }}>
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #C95B5B", borderRadius: "50%", width: "16px", height: "16px", fontSize: "11px", fontWeight: "700" }}>
                     {idx + 1}
                   </span>
                   {text}
