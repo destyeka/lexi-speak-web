@@ -24,6 +24,7 @@
     "flowbite": "^4.0.1",
     "flowbite-react": "^0.12.17",
     "fullcalendar": "^6.1.20",
+    "groq-sdk": "^1.2.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.8.0",

@@ -152,7 +152,7 @@ export default function StudentClassAssignmentPage() {
       .from("assignment_submissions")
       .upsert(submissionPayload, { onConflict: "assignment_id,student_id" });
 
-    router.push(`/onboarding?assignmentId=${assignment.id}&mode=learn&part=${assignment.part ?? 1}&autostart=1`);
+    router.push(`/learn?assignmentId=${assignment.id}&part=${assignment.part ?? 1}&autostart=1`);
   };
 
   if (loading) {

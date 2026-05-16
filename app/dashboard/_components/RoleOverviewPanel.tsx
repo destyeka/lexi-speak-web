@@ -647,7 +647,7 @@ export default function RoleOverviewPanel({
 
   const handleUnitPartClick = (unitIndex: number, partIndex: number) => {
     const targetMode = unitIndex === 1 ? "learn" : "test";
-    router.push(`/onboarding?mode=${targetMode}&unit=${unitIndex}&part=${partIndex}&autostart=1&replay=1`);
+    router.push(`/learn?mode=${targetMode}&unit=${unitIndex}&part=${partIndex}&autostart=1&replay=1`);
   };
 
   const handleConnectCoachForTest = async () => {
@@ -673,7 +673,7 @@ export default function RoleOverviewPanel({
     setProfile((prev) => (prev ? { ...prev, coach_id: selectedCoachId } : prev));
     setNotice(selectedCoach ? `Connected to ${selectedCoach.email} for IELTS test.` : "Coach connected for IELTS test.");
     setConnectingCoach(false);
-    router.push("/onboarding?mode=test&unit=2&part=1&autostart=1&replay=1");
+    router.push("/learn?mode=test&unit=2&part=1&autostart=1&replay=1");
   };
 
   const [modalUnitIndex, setModalUnitIndex] = useState<number | null>(null);
@@ -748,7 +748,7 @@ export default function RoleOverviewPanel({
           {filteredLearnUnitCards.map((unit) => {
             const unitIndex = unit.unitIndex;
             return (
-              <UnitCard
+                <UnitCard
                 key={unit.id}
                 subtitle={unit.subtitle}
                 title={unit.title}
@@ -756,7 +756,7 @@ export default function RoleOverviewPanel({
                 price={unit.price}
                 progress={getUnitProgress(unitIndex)}
                 status="Active"
-                onStart={() => router.push(`/onboarding?mode=learn&unit=${unitIndex}&part=1&autostart=1`)}
+                onStart={() => router.push(`/learn?unit=${unitIndex}&part=1&autostart=1`)}
               />
             );
           })}
@@ -804,7 +804,7 @@ export default function RoleOverviewPanel({
                 price={unit.price}
                 progress={getUnitProgress(unitIndex)}
                 status="Active"
-                onStart={() => router.push(`/onboarding?mode=test&unit=${unitIndex}&part=1&autostart=1`)}
+                onStart={() => router.push(`/learn?mode=test&unit=${unitIndex}&part=1&autostart=1`) }
               />
             );
           })}
