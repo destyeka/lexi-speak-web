@@ -4,11 +4,14 @@ export type TopicDetail = {
   id: string;
   type: "question" | "bullet";
   content: string;
+  rubric?: string | null;
   order_index: number;
 };
 
 export type Topic = {
   id: string;
+  unit_id?: string;
+  topic_code?: string;
   part: number;
   title: string;
   prompt?: string;
@@ -36,6 +39,7 @@ export async function getTopicsByPart(part: number): Promise<Topic[]> {
           id,
           type,
           content,
+          rubric,
           order_index
         )
       `,
@@ -53,9 +57,11 @@ export async function getTopicsByPart(part: number): Promise<Topic[]> {
     return (
       topics?.map((topic) => ({
         ...topic,
-        details: (topic.topic_details || []).sort(
-          (a, b) => (a.order_index || 0) - (b.order_index || 0),
-        ),
+        details: (() => {
+          const details: TopicDetail[] = ((topic.topic_details as TopicDetail[] | undefined) || []).slice();
+          details.sort((a: TopicDetail, b: TopicDetail) => (a.order_index || 0) - (b.order_index || 0));
+          return details;
+        })(),
       })) || []
     );
   } catch (error) {
@@ -118,13 +124,204 @@ export async function getRandomTopicsFromPart(
  * or a UUID for a unit record. This helper tries to be tolerant and will
  * delegate to `getTopicsByPart` when `unitId` looks like a small integer.
  */
-export async function getTopicsByUnit(unitId: string | null): Promise<Topic[]> {
+export async function getTopicsByUnit(
+  unitId: string | null,
+  mode: "learn" | "test" | null = null,
+): Promise<Topic[]> {
   if (!unitId) return [];
 
-  // If unitId is a small integer string, treat it as part number
+  // If unitId is numeric, treat it as dashboard unit index and resolve via session_units.
   const asNum = parseInt(unitId, 10);
   if (!isNaN(asNum) && String(asNum) === unitId) {
-    return await getTopicsByPart(asNum);
+    try {
+      const sessionType = mode === "test" ? "test" : "practice";
+      const normalizeTopics = (topics: any[]): Topic[] => {
+        return (
+          topics?.map((topic) => ({
+            ...topic,
+            details: (() => {
+              const details: TopicDetail[] = ((topic.topic_details as TopicDetail[] | undefined) || []).slice();
+              details.sort((a: TopicDetail, b: TopicDetail) => (a.order_index || 0) - (b.order_index || 0));
+              return details;
+            })(),
+          })) || []
+        );
+      };
+
+      const pickBestUnitTopics = (topics: Topic[]): Topic[] => {
+        if (!topics.length) return [];
+        const groups = new Map<string, Topic[]>();
+        for (const topic of topics) {
+          const key = topic.unit_id || "";
+          if (!key) continue;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(topic);
+        }
+        if (!groups.size) return topics;
+
+        const ranked = Array.from(groups.entries())
+          .map(([unit, rows]) => {
+            const parts = new Set(rows.map((r) => r.part));
+            const hasPart2 = parts.has(2);
+            const latest = Math.max(
+              ...rows.map((r) => new Date(r.created_at || 0).getTime() || 0),
+            );
+            return { unit, rows, partCount: parts.size, hasPart2, latest };
+          })
+          .sort((a, b) => {
+            if (a.hasPart2 !== b.hasPart2) return a.hasPart2 ? -1 : 1;
+            if (a.partCount !== b.partCount) return b.partCount - a.partCount;
+            return b.latest - a.latest;
+          });
+
+        return ranked[0].rows.sort((a, b) => a.part - b.part);
+      };
+
+      const fetchTopicsByTopicCodePattern = async (): Promise<Topic[]> => {
+        const seqFormatted = String(asNum).padStart(4, "0");
+        const modePrefix = sessionType === "test" ? "TS" : "PT";
+
+        const { data: topicRows, error: topicRowsError } = await supabase
+          .from("topics")
+          .select(
+            `
+            id,
+            unit_id,
+            topic_code,
+            part,
+            title,
+            prompt,
+            is_active,
+            created_at,
+            topic_details (
+              id,
+              type,
+              content,
+              rubric,
+              order_index
+            )
+          `,
+          )
+          .eq("session", sessionType)
+          .eq("is_active", true)
+          .ilike("topic_code", `${modePrefix}%-${seqFormatted}-P%`)
+          .order("created_at", { ascending: false });
+
+        if (topicRowsError) {
+          console.error("Error resolving topics by topic_code pattern:", topicRowsError);
+          return [];
+        }
+
+        return pickBestUnitTopics(normalizeTopics(topicRows || []));
+      };
+
+      const fetchTopicsByUnitId = async (resolvedUnitId: string): Promise<Topic[]> => {
+        const { data: topics, error } = await supabase
+          .from("topics")
+          .select(
+            `
+            id,
+            unit_id,
+            topic_code,
+            part,
+            title,
+            prompt,
+            is_active,
+            created_at,
+            topic_details (
+              id,
+              type,
+              content,
+              rubric,
+              order_index
+            )
+          `,
+          )
+          .eq("unit_id", resolvedUnitId)
+          .eq("is_active", true)
+          .order("part", { ascending: true });
+
+        if (error) {
+          console.error("Error fetching topics by resolved unit:", error);
+          return [];
+        }
+
+        return normalizeTopics(topics || []);
+      };
+
+      const { data: unitRows, error: unitError } = await supabase
+        .from("session_units")
+        .select("id, type, seq, is_active, created_at")
+        .eq("seq", asNum)
+        .eq("type", sessionType)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (unitError) {
+        console.error("Error resolving session unit by index:", unitError);
+        return [];
+      }
+
+      const indexedUnitId = unitRows?.[0]?.id as string | undefined;
+      let resolvedUnitId = indexedUnitId;
+
+      // Fallback when mode does not match available unit type.
+      if (!resolvedUnitId) {
+        const { data: fallbackUnits, error: fallbackUnitError } = await supabase
+          .from("session_units")
+          .select("id, seq, is_active, created_at")
+          .eq("seq", asNum)
+          .eq("is_active", true)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (fallbackUnitError) {
+          console.error("Error resolving fallback session unit by index:", fallbackUnitError);
+          return [];
+        }
+
+        resolvedUnitId = fallbackUnits?.[0]?.id as string | undefined;
+      }
+
+      if (!resolvedUnitId) {
+        return await fetchTopicsByTopicCodePattern();
+      }
+
+      let resolvedTopics = await fetchTopicsByUnitId(resolvedUnitId);
+      const hasPart2 = resolvedTopics.some((topic) => topic.part === 2);
+
+      // If indexed unit exists but content is incomplete, use latest active unit for that mode.
+      if (indexedUnitId && (!resolvedTopics.length || !hasPart2)) {
+        const { data: latestUnits, error: latestUnitError } = await supabase
+          .from("session_units")
+          .select("id")
+          .eq("type", sessionType)
+          .eq("is_active", true)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (!latestUnitError) {
+          const latestUnitId = latestUnits?.[0]?.id as string | undefined;
+          if (latestUnitId && latestUnitId !== indexedUnitId) {
+            const latestTopics = await fetchTopicsByUnitId(latestUnitId);
+            if (latestTopics.some((topic) => topic.part === 2)) {
+              resolvedTopics = latestTopics;
+            }
+          }
+        }
+      }
+
+      if (!resolvedTopics.length || !resolvedTopics.some((topic) => topic.part === 2)) {
+        const byPattern = await fetchTopicsByTopicCodePattern();
+        if (byPattern.length) resolvedTopics = byPattern;
+      }
+
+      return resolvedTopics;
+    } catch (error) {
+      console.error("Error resolving topics by unit index:", error);
+      return [];
+    }
   }
 
   try {
@@ -133,6 +330,7 @@ export async function getTopicsByUnit(unitId: string | null): Promise<Topic[]> {
       .select(
         `
         id,
+        unit_id,
         part,
         title,
         prompt,

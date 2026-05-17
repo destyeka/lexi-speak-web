@@ -124,9 +124,30 @@ const AppSidebar: React.FC = () => {
 
   useEffect(() => {
     const loadRole = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      // supabase auth can occasionally throw a transient lock error when
+      // multiple requests try to refresh the session simultaneously.
+      // Retry a few times with a small backoff to avoid crashing the layout.
+      let user: any = null;
+      const maxAttempts = 4;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const result = await supabase.auth.getUser();
+          user = result?.data?.user ?? null;
+          break;
+        } catch (err: any) {
+          const msg = err?.message ?? String(err ?? "");
+          console.warn(`supabase.auth.getUser attempt ${attempt} failed:`, msg);
+          // If it's a transient lock steal, retry after a short delay
+          if (attempt < maxAttempts && msg.includes("lock")) {
+            await new Promise((res) => setTimeout(res, 150 * attempt));
+            continue;
+          }
+          // Non-retriable or out of attempts: log and bail out
+          console.error("supabase.auth.getUser error:", err);
+          user = null;
+          break;
+        }
+      }
 
       if (!user) {
         setRole("user");

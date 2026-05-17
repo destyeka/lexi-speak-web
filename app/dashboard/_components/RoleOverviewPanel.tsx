@@ -529,96 +529,190 @@ export default function RoleOverviewPanel({
     },
   ];
 
-  const unitCards: JourneyUnitCard[] = [
-    {
-      id: "unit-1",
-      unitIndex: 1,
-      mode: "learn",
-      title: "Unit 1",
-      subtitle: "Learn mode",
-      price: 0,
-      topic: "Your home town or village",
-      description: "Flexible practice. Open any part first, then move in your own order.",
-      accent: "from-brand-500 to-brand-300",
-      actionLabel: "Open Learn Hub",
-      parts: [
-        { id: 1, title: "Part 1", hint: "Chatbot warm-up" },
-        { id: 2, title: "Part 2", hint: "Core content card" },
-        { id: 3, title: "Part 3", hint: "Chatbot follow-up" },
-      ],
-      journey: {
-        part1: [
-          { prompt: "Where is your hometown or village located?", reply: "It is a quiet place near the river, surrounded by hills." },
-          { prompt: "What do people usually notice first there?", reply: "The streets are calm, and everyone seems to know each other." },
-          { prompt: "Is it more busy or peaceful on a normal day?", reply: "Usually peaceful, but the market becomes lively in the morning." },
-          { prompt: "What is something you personally like about it?", reply: "I like the slower pace because it feels comfortable and familiar." },
-          { prompt: "Has it changed much over time?", reply: "Yes, there are more shops now, but it still keeps its local character." },
-          { prompt: "Would you like to live there in the future?", reply: "Yes, because it feels like home and the community is very supportive." },
-        ],
-        part2: {
-          title: "Core concept",
-          prompt: "Describe your home town or village and explain what makes it special.",
-          points: [
-            "Start with a clear location and one visual detail so the listener can picture it quickly.",
-            "Add one personal memory or routine to make the answer feel real, not generic.",
-            "Show how the place has changed and what stayed the same over time.",
-            "Finish with a simple judgment: why it still matters to you today.",
-          ],
-          takeaway: "Use one strong example, then expand it in a clean flow.",
-        },
-        part3: [
-          { prompt: "Why do you think people feel attached to their hometowns?", reply: "Because the place is tied to family, memories, and identity." },
-          { prompt: "What changes could make small villages better for young people?", reply: "Better transport, more learning spaces, and more job opportunities." },
-          { prompt: "Why do some people decide to leave their hometown?", reply: "They may move for work, study, or a faster lifestyle in the city." },
-          { prompt: "Should local governments protect traditional neighborhoods?", reply: "Yes, because they preserve culture while still giving people a sense of belonging." },
-        ],
-      },
-    },
-    {
-      id: "unit-2",
-      unitIndex: 2,
-      mode: "test",
-      title: "Test Mode",
-      subtitle: "Test mode",
-      price: 50000,
-      topic: "Your accommodation",
-      description: "Strict practice. The order is locked and the coach is connected at test start.",
-      accent: "from-amber-500 to-orange-300",
-      actionLabel: "Open Test Hub",
-      parts: [
-        { id: 1, title: "Part 1", hint: "Chatbot warm-up" },
-        { id: 2, title: "Part 2", hint: "Core content card" },
-        { id: 3, title: "Part 3", hint: "Chatbot follow-up" },
-      ],
-      journey: {
-        part1: [
-          { prompt: "What kind of place do you live in right now?", reply: "I live in a comfortable apartment in a quiet neighborhood." },
-          { prompt: "What do you like most about your accommodation?", reply: "It is clean, convenient, and close to the places I need." },
-          { prompt: "Is your home usually quiet or busy?", reply: "It is mostly quiet, which helps me focus and rest well." },
-          { prompt: "What makes a home feel comfortable to you?", reply: "Good light, enough space, and a peaceful atmosphere." },
-          { prompt: "Have you lived there for a long time?", reply: "Not too long, but long enough to get used to the area." },
-          { prompt: "Would you like to change anything about it?", reply: "Maybe a bigger study area, but overall it works well for me." },
-        ],
-        part2: {
-          title: "Core concept",
-          prompt: "Describe your accommodation and explain what makes it comfortable or challenging.",
-          points: [
-            "Describe the layout or atmosphere first, then narrow down to one concrete detail.",
-            "Mention a comfort factor and a challenge so the answer sounds balanced.",
-            "Link the place to your daily routine, study, or rest.",
-            "Close with a short conclusion about why it suits you right now.",
-          ],
-          takeaway: "Balance positives and limitations in one clear explanation.",
-        },
-        part3: [
-          { prompt: "How does housing affect a person’s lifestyle?", reply: "It can shape sleep, focus, and even social habits." },
-          { prompt: "What should people consider before choosing a place to live?", reply: "Location, cost, safety, and daily convenience matter a lot." },
-          { prompt: "Why do some people prefer living in apartments?", reply: "They are often practical, secure, and close to work or study places." },
-          { prompt: "Should governments make housing more affordable?", reply: "Yes, because stable housing has a big impact on quality of life." },
-        ],
-      },
-    },
-  ];
+  const [unitCards, setUnitCards] = useState<JourneyUnitCard[]>([]);
+
+  
+  
+  
+
+  const [dynamicUnitCards, setDynamicUnitCards] = useState<JourneyUnitCard[]>([]);
+  const effectiveUnitCards = dynamicUnitCards.length ? dynamicUnitCards : unitCards;
+
+  useEffect(() => {
+    if (expectedRole !== "user") return;
+
+    const loadTopicDrivenCards = async () => {
+      try {
+        const { data: sessionUnits, error: suErr } = await supabase
+          .from("session_units")
+          .select("id, seq, type, title, session_code, description")
+          .order("seq", { ascending: true });
+
+        const { data: topics, error: tErr } = await supabase
+          .from("topics")
+          .select("id, unit_id, topic_code, part, title, prompt, is_active, topic_details(id, type, content, order_index)")
+          .order("unit_id, part", { ascending: true });
+
+        console.debug("RoleOverviewPanel: fetched session_units/topics", { sessionUnits, topics, suErr, tErr });
+
+        if (tErr) {
+          console.error("RoleOverviewPanel: topics fetch error", tErr);
+          return;
+        }
+
+        if ((!sessionUnits || sessionUnits.length === 0) && (!topics || topics.length === 0)) {
+          console.debug("RoleOverviewPanel: no session_units or topics found");
+          return;
+        }
+
+        // If admin created topics but didn't create session_units, build units from topics grouping
+        if ((!sessionUnits || sessionUnits.length === 0) && topics && topics.length > 0) {
+          const groups = new Map<string, any[]>();
+          topics.forEach((t: any) => {
+            const key = t.unit_id || (t.topic_code ? t.topic_code.split("-")[0] : "unknown");
+            const current = groups.get(key);
+            if (current) {
+              current.push(t);
+            } else {
+              groups.set(key, [t]);
+            }
+          });
+
+          const cardsFromTopics: JourneyUnitCard[] = Array.from(groups.entries()).map(([key, group], idx) => {
+            const part1Items: any[] = [];
+            const part3Items: any[] = [];
+            let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;
+
+            group.forEach((t: any) => {
+              const details = Array.isArray(t.topic_details) ? t.topic_details : [];
+              if (t.part === 1) details.filter((d: any) => d.type === "question").forEach((d: any) => part1Items.push({ prompt: d.content, reply: "" }));
+              if (t.part === 2) {
+                part2Content.title = t.title || part2Content.title;
+                part2Content.prompt = t.prompt || part2Content.prompt;
+                const bullets = details.filter((d: any) => d.type === "bullet").sort((a: any,b:any)=> (a.order_index||0)-(b.order_index||0)).map((d:any)=>d.content);
+                part2Content.points = bullets.slice(0,4);
+              }
+              if (t.part === 3) details.filter((d: any) => d.type === "question").forEach((d: any) => part3Items.push({ prompt: d.content, reply: "" }));
+            });
+
+            return {
+              id: `topic-group-${key}`,
+              unitIndex: idx + 1,
+              mode: "learn",
+              title: part2Content.title || group[0]?.title || `Unit ${idx + 1}`,
+              subtitle: "Learn mode",
+              price: 0,
+              topic: part2Content.title || group[0]?.title || "",
+              description: group[0]?.prompt || "",
+              accent: "from-brand-500 to-brand-300",
+              actionLabel: "Open Learn Hub",
+              parts: [
+                { id: 1, title: "Part 1", hint: "Chatbot warm-up" },
+                { id: 2, title: "Part 2", hint: "Core content card" },
+                { id: 3, title: "Part 3", hint: "Chatbot follow-up" },
+              ],
+              journey: { part1: part1Items, part2: part2Content, part3: part3Items },
+            } as JourneyUnitCard;
+          });
+
+          setDynamicUnitCards(cardsFromTopics);
+          console.debug("RoleOverviewPanel: built cards from topics (no session_units)", { count: cardsFromTopics.length });
+          return;
+        }
+
+        // Build cards from session_units, populated with topic data
+        const safeSessionUnits = sessionUnits ?? [];
+        const cards: JourneyUnitCard[] = safeSessionUnits.map((unit: any) => {
+          // Find all topics for this unit. Prefer explicit unit_id, but fallback
+          // to matching by session_code / seq if admin created topics without unit_id.
+          const seqFormatted = String(unit.seq ?? "").padStart(4, "0");
+          const modePrefix = unit.type === "test" ? "TS" : "PT";
+          const unitTopics = topics.filter((t: any) => {
+            if (t.unit_id && t.unit_id === unit.id) return true;
+            const code = (t.topic_code || "").toString();
+            if (!code) return false;
+            if (unit.session_code && code.includes(unit.session_code)) return true;
+            if (code.includes(`${modePrefix}%-${seqFormatted}-P`.replace("%",""))) return true;
+            // also match by seq pattern fragment
+            if (code.includes(`-${seqFormatted}-P`)) return true;
+            return false;
+          });
+          
+          // Build part contents from all topics for this unit
+          const part1Items: any[] = [];
+          const part3Items: any[] = [];
+          let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;
+
+          unitTopics.forEach((t: any) => {
+            const details = Array.isArray(t.topic_details) ? t.topic_details : [];
+
+            if (t.part === 1) {
+              details.filter((d: any) => d.type === "question").forEach((d: any) => {
+                part1Items.push({ prompt: d.content, reply: "" });
+              });
+            }
+
+            if (t.part === 2) {
+              part2Content.title = t.title || part2Content.title;
+              part2Content.prompt = t.prompt || part2Content.prompt;
+              const bullets = details.filter((d: any) => d.type === "bullet").sort((a: any, b: any) => (a.order_index || 0) - (b.order_index || 0)).map((d: any) => d.content);
+              part2Content.points = bullets.slice(0, 4);
+              part2Content.takeaway = part2Content.takeaway || "Synchronized from admin";
+            }
+
+            if (t.part === 3) {
+              details.filter((d: any) => d.type === "question").forEach((d: any) => {
+                part3Items.push({ prompt: d.content, reply: "" });
+              });
+            }
+          });
+
+          const topicTitle = part2Content.title || unitTopics[0]?.title || "Topic";
+          const topicPrompt = part2Content.prompt || unitTopics[0]?.prompt || "Start your practice";
+
+          const unitMode = unit.type === "test" ? "test" : "learn";
+          const modeLabel = unitMode === "test" ? "Test mode" : "Learn mode";
+          const accent = unitMode === "test" ? "from-amber-500 to-orange-300" : "from-brand-500 to-brand-300";
+          const actionLabel = unitMode === "test" ? "Open Test Hub" : "Open Learn Hub";
+
+          return {
+            id: unit.id ?? `unit-${unit.seq}`,
+            unitIndex: unit.seq ?? 1,
+            mode: unitMode,
+            title: unit.title ?? `Unit ${unit.seq}`,
+            subtitle: modeLabel,
+            price: unit.price ?? 0,
+            topic: topicTitle,
+            description: unit.description ?? (unit.mode === "test" ? "Strict practice. The order is locked and the coach is connected at test start." : "Flexible practice. Open any part first, then move in your own order."),
+            accent,
+            actionLabel,
+            parts: [
+              { id: 1, title: "Part 1", hint: "Chatbot warm-up" },
+              { id: 2, title: "Part 2", hint: "Core content card" },
+              { id: 3, title: "Part 3", hint: "Chatbot follow-up" },
+            ],
+            journey: {
+              part1: part1Items,
+              part2: {
+                title: part2Content.title || "Core concept",
+                prompt: part2Content.prompt || topicPrompt,
+                points: part2Content.points || [],
+                takeaway: part2Content.takeaway || "Synchronized from admin",
+              },
+              part3: part3Items,
+            },
+          } as JourneyUnitCard;
+        });
+
+        setDynamicUnitCards(cards);
+        console.debug("RoleOverviewPanel: built dynamic cards from session_units", { count: cards.length });
+      } catch (err) {
+        console.error("RoleOverviewPanel: error building topic-driven cards", err);
+      }
+    };
+
+    void loadTopicDrivenCards();
+  }, [expectedRole]);
 
   const completedPartsByUnit = useMemo(() => {
     const unitMap = new Map<number, Set<number>>();
@@ -703,12 +797,12 @@ export default function RoleOverviewPanel({
   };
 
   const filteredLearnUnitCards = useMemo(() => {
-    return filterAndSortUnitCards(unitCards.filter((u) => u.mode === "learn"));
-  }, [searchQuery, unitCards, sortOrder]);
+    return filterAndSortUnitCards(effectiveUnitCards.filter((u) => u.mode === "learn"));
+  }, [searchQuery, effectiveUnitCards, sortOrder]);
 
   const filteredTestUnitCards = useMemo(() => {
-    return filterAndSortUnitCards(unitCards.filter((u) => u.mode === "test"));
-  }, [searchQuery, unitCards, sortOrder]);
+    return filterAndSortUnitCards(effectiveUnitCards.filter((u) => u.mode === "test"));
+  }, [searchQuery, effectiveUnitCards, sortOrder]);
 
   if (loading) {
     return (
@@ -745,21 +839,30 @@ export default function RoleOverviewPanel({
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredLearnUnitCards.map((unit) => {
-            const unitIndex = unit.unitIndex;
-            return (
+          {filteredLearnUnitCards.length === 0 ? (
+            <div className="col-span-full rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
+              No learn units configured yet — please ask your admin to create units.
+            </div>
+          ) : (
+            filteredLearnUnitCards.map((unit) => {
+              const unitIndex = unit.unitIndex;
+              return (
                 <UnitCard
-                key={unit.id}
-                subtitle={unit.subtitle}
-                title={unit.title}
-                topic={unit.topic}
-                price={unit.price}
-                progress={getUnitProgress(unitIndex)}
-                status="Active"
-                onStart={() => router.push(`/learn?unit=${unitIndex}&part=1&autostart=1`)}
-              />
-            );
-          })}
+                  key={unit.id}
+                  subtitle={unit.subtitle}
+                  title={unit.title}
+                  topic={unit.topic}
+                  price={unit.price}
+                  progress={getUnitProgress(unitIndex)}
+                  status="Active"
+                  accent={unit.accent}
+                  partsCount={unit.parts?.length}
+                  coreFocus={unit.unitIndex === 2}
+                  onStart={() => router.push(`/learn?unit=${unitIndex}&part=1&autostart=1`)}
+                />
+              );
+            })
+          )}
         </div>
       </section>
     );
@@ -793,21 +896,30 @@ export default function RoleOverviewPanel({
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredTestUnitCards.map((unit) => {
-            const unitIndex = unit.unitIndex;
-            return (
-              <UnitCard
-                key={unit.id}
-                subtitle={unit.subtitle}
-                title={unit.title}
-                topic={unit.topic}
-                price={unit.price}
-                progress={getUnitProgress(unitIndex)}
-                status="Active"
-                onStart={() => router.push(`/learn?mode=test&unit=${unitIndex}&part=1&autostart=1`) }
-              />
-            );
-          })}
+          {filteredTestUnitCards.length === 0 ? (
+            <div className="col-span-full rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
+              No test units configured yet — please ask your admin to create units.
+            </div>
+          ) : (
+            filteredTestUnitCards.map((unit) => {
+              const unitIndex = unit.unitIndex;
+              return (
+                <UnitCard
+                  key={unit.id}
+                  subtitle={unit.subtitle}
+                  title={unit.title}
+                  topic={unit.topic}
+                  price={unit.price}
+                  progress={getUnitProgress(unitIndex)}
+                  status="Active"
+                  accent={unit.accent}
+                  partsCount={unit.parts?.length}
+                  coreFocus={unit.unitIndex === 2}
+                  onStart={() => router.push(`/learn?mode=test&unit=${unitIndex}&part=1&autostart=1`) }
+                />
+              );
+            })
+          )}
         </div>
       </section>
     );
@@ -869,7 +981,7 @@ export default function RoleOverviewPanel({
 
       {/* Unit modal */}
       {modalUnitIndex !== null && (() => {
-        const unit = unitCards[modalUnitIndex - 1] as any;
+        const unit = effectiveUnitCards[modalUnitIndex - 1] as any;
         const unitIndex = modalUnitIndex;
         if (!unit) return null;
         return (
@@ -927,37 +1039,43 @@ export default function RoleOverviewPanel({
             </div>
 
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              {unitCards.map((unit, idx) => {
-                const unitIndex = idx + 1;
-                const unitProgress = getUnitProgress(unitIndex);
-                return (
-                  <div key={unit.id} className="relative overflow-hidden rounded-[20px] border border-gray-100 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] dark:border-gray-800 dark:bg-white/[0.02]">
-                    <div className={`pointer-events-none absolute -right-6 -top-8 h-28 w-28 rounded-full blur-3xl ${unit.accent}`} />
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">{unit.subtitle}</p>
-                        <h4 className="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">{unit.title}</h4>
+              {effectiveUnitCards.length === 0 ? (
+                <div className="col-span-full rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
+                  No units configured by admin. Please contact your administrator to add units and topics.
+                </div>
+              ) : (
+                effectiveUnitCards.map((unit, idx) => {
+                  const unitIndex = idx + 1;
+                  const unitProgress = getUnitProgress(unitIndex);
+                  return (
+                    <div key={unit.id} className="relative overflow-hidden rounded-[20px] border border-gray-100 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] dark:border-gray-800 dark:bg-white/[0.02]">
+                      <div className={`pointer-events-none absolute -right-6 -top-8 h-28 w-28 rounded-full blur-3xl ${unit.accent}`} />
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">{unit.subtitle}</p>
+                          <h4 className="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">{unit.title}</h4>
+                        </div>
+                        <div className="flex flex-col items-end">
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white bg-gradient-to-r ${unit.accent}`}>3 Parts</span>
+                          {unitIndex === 2 ? <span className="mt-2 text-xs font-medium text-amber-600">Core focus</span> : null}
+                        </div>
                       </div>
-                      <div className="flex flex-col items-end">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white bg-gradient-to-r ${unit.accent}`}>3 Parts</span>
-                        {unitIndex === 2 ? <span className="mt-2 text-xs font-medium text-amber-600">Core focus</span> : null}
+
+                      <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-2">{unit.topic}</p>
+
+                      <div className="mt-4">
+                        <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800">
+                          <div className={`h-full rounded-full bg-gradient-to-r ${unit.accent}`} style={{ width: `${unitProgress}%` }} />
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                          <span>{unitProgress.toFixed(1)}% complete</span>
+                          <button onClick={() => openUnitModal(unitIndex)} className="text-xs font-medium text-brand-600">View</button>
+                        </div>
                       </div>
                     </div>
-
-                    <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-2">{unit.topic}</p>
-
-                    <div className="mt-4">
-                      <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800">
-                        <div className={`h-full rounded-full bg-gradient-to-r ${unit.accent}`} style={{ width: `${unitProgress}%` }} />
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-                        <span>{unitProgress.toFixed(1)}% complete</span>
-                        <button onClick={() => openUnitModal(unitIndex)} className="text-xs font-medium text-brand-600">View</button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -1076,7 +1194,7 @@ export default function RoleOverviewPanel({
 
       {expectedRole === "user" ? (
         <div className="grid gap-6 lg:grid-cols-2">
-          {unitCards.map((unit, unitOffset) => {
+                {effectiveUnitCards.map((unit, unitOffset) => {
             const unitIndex = unitOffset + 1;
             const unitProgress = getUnitProgress(unitIndex);
 

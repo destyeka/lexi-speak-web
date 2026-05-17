@@ -1,7 +1,8 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
+import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
 import {
   getBulletsFromTopic,
   getQuestionsFromTopic,
@@ -23,7 +24,8 @@ interface PageMap {
 interface ChatMessage { role: string; text: string; }
 
 interface SessionPageProps {
-  messages: ChatMessage[];
+  topic?: Topic | null;
+  messages?: ChatMessage[];
   isListening: boolean;
   isRecording: boolean;
   setIsRecording: (value: boolean) => void;
@@ -35,6 +37,7 @@ interface SessionPageProps {
   setLiveTranscript: React.Dispatch<React.SetStateAction<string>>;
   interimTranscript: string;
   setInterimTranscript: React.Dispatch<React.SetStateAction<string>>;
+  onSaveQuestionTranscripts?: (arr: string[]) => void;
 }
 
 interface SessionPagePart2Props {
@@ -49,11 +52,31 @@ interface SessionPagePart2Props {
   recError: string | null;
   setRecError: (value: string | null) => void;
   isListening: boolean;
+  topic: Topic | null;
+  bullets?: string[];
+  isLoading?: boolean;
 }
 
-interface ResultPageProps { transcript: string; }
-interface MetricData { id: string; label: string; score: string; text: string; }
-interface ScoreData { overall: string; metrics: MetricData[]; recommendation: string; }
+interface ResultPageProps {
+  transcript: string;
+  topic: Topic | null;
+  partLabel: string;
+}
+
+interface MetricData {
+  id: string;
+  label: string;
+  score: string;
+  text: string;
+}
+
+interface EvaluationResult {
+  overall: string;
+  level: string;
+  metrics: MetricData[];
+  recommendation: string;
+  analysis: string;
+}
 interface SpeechRecognitionEventLike {
   resultIndex: number;
   results: ArrayLike<{ isFinal: boolean; 0: { transcript: string }; }>;
@@ -89,6 +112,48 @@ const PulseRing = ({ color = "#ef4444", size = 180 }: { color?: string; size?: n
   <div style={{ position: "absolute", width: size, height: size, borderRadius: "50%", background: `radial-gradient(circle, ${color}33 0%, ${color}11 50%, transparent 75%)`, animation: "pulseGlow 2.5s ease-in-out infinite", pointerEvents: "none" }} />
 );
 
+function DetailBubbleList({
+  label,
+  items,
+  accent,
+}: {
+  label: string;
+  items: string[];
+  accent: string;
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <div style={styles.detailSection}>
+      <p style={styles.instructionLabel}>{label}</p>
+      <div style={styles.detailWrap}>
+        {items.map((item, index) => (
+          <div
+            key={`${label}-${index}-${item}`}
+            style={{
+              ...styles.detailBubble,
+              borderColor: `${accent}33`,
+              background: `${accent}10`,
+              color: accent,
+            }}
+          >
+            <span
+              style={{
+                ...styles.detailIndex,
+                borderColor: accent,
+                color: accent,
+              }}
+            >
+              {index + 1}
+            </span>
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function LexaPracticeSession() {
   const searchParams = useSearchParams();
   const [page, setPage] = useState<PageValue>(PAGES.INTRO);
@@ -108,12 +173,11 @@ export default function LexaPracticeSession() {
   const [transcriptPart1, setTranscriptPart1] = useState("");
   const [transcriptPart2, setTranscriptPart2] = useState("");
 
-  const [messages] = useState<ChatMessage[]>([
-    { role: "lexa", text: "Good morning, my name is Lexa. What's your name?" },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const unitId = searchParams.get("unit");
+  const mode = searchParams.get("mode") as "learn" | "test" | null;
 
   useEffect(() => {
     let cancelled = false;
@@ -126,7 +190,7 @@ export default function LexaPracticeSession() {
       }
 
       setIsTopicsLoading(true);
-      const topics = await getTopicsByUnit(unitId);
+      const topics = await getTopicsByUnit(unitId, mode);
 
       if (!cancelled) {
         setSessionTopics(topics);
@@ -139,12 +203,16 @@ export default function LexaPracticeSession() {
     return () => {
       cancelled = true;
     };
-  }, [unitId]);
+  }, [unitId, mode]);
 
   const part1Topic = sessionTopics.find((topic) => topic.part === 1) ?? null;
   const part2Topic = sessionTopics.find((topic) => topic.part === 2) ?? null;
   const part3Topic = sessionTopics.find((topic) => topic.part === 3) ?? null;
 
+  const part1Questions = part1Topic ? getQuestionsFromTopic(part1Topic) : [];
+  const part2BulletsRaw = part2Topic ? getBulletsFromTopic(part2Topic) : [];
+  const part2QuestionsRaw = part2Topic ? getQuestionsFromTopic(part2Topic) : [];
+  const part2Bullets = part2BulletsRaw.length ? part2BulletsRaw : part2QuestionsRaw;
   const part3Questions = part3Topic ? getQuestionsFromTopic(part3Topic) : [];
   const part3Bullets = part3Topic ? getBulletsFromTopic(part3Topic) : [];
 
@@ -303,16 +371,19 @@ export default function LexaPracticeSession() {
 
       {/* Body */}
       <main style={styles.main}>
-        {page === PAGES.INTRO && <IntroPage />}
+        {page === PAGES.INTRO && <IntroPage topic={part1Topic} />}
         {page === PAGES.SESSION && (
-          <SessionPage messages={messages} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart1} setTranscript={setTranscriptPart1} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} />
+          <SessionPage topic={part1Topic} questions={part1Questions} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart1} setTranscript={setTranscriptPart1} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} onSaveQuestionTranscripts={(arr) => {
+            const joined = (arr || []).filter(Boolean).join(" ").trim();
+            setTranscriptPart1((prev) => prev === joined ? prev : joined);
+          }} />
         )}
-        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} />}
-        {page === PAGES.PART2_INTRO && <IntroPagePart2 />}
+        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" />}
+        {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
         {page === PAGES.PART2_SESSION && (
-          <SessionPagePart2 isRecording={isRecording} setIsRecording={setIsRecording} transcript={transcriptPart2} setTranscript={setTranscriptPart2} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} recError={recError} setRecError={setRecError} isListening={isListening} />
+          <SessionPagePart2 isRecording={isRecording} setIsRecording={setIsRecording} transcript={transcriptPart2} setTranscript={setTranscriptPart2} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} recError={recError} setRecError={setRecError} isListening={isListening} topic={part2Topic} bullets={part2Bullets} isLoading={isTopicsLoading} />
         )}
-        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} />}
+        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" />}
         {page === PAGES.PART3_INTRO && (
           <IntroPagePart3
             topic={part3Topic}
@@ -321,9 +392,12 @@ export default function LexaPracticeSession() {
           />
         )}
         {page === PAGES.PART3_SESSION && (
-          <SessionPage messages={part3Messages} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart3} setTranscript={setTranscriptPart3} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} />
+          <SessionPage messages={part3Messages} questions={part3Questions} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart3} setTranscript={setTranscriptPart3} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} onSaveQuestionTranscripts={(arr) => {
+            const joined = (arr || []).filter(Boolean).join(" ").trim();
+            setTranscriptPart3((prev) => prev === joined ? prev : joined);
+          }} />
         )}
-        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} />}
+        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" />}
       </main>
 
       {/* Footer Utama */}
@@ -382,40 +456,47 @@ export default function LexaPracticeSession() {
   );
 }
 
-function IntroPage() {
+function IntroPage({ topic }: { topic: Topic | null }) {
+  const topicTitle = topic?.title ?? "Speaking Topic";
+  const topicPrompt = topic?.prompt ?? "Let's talk about this topic.";
+  const bullets = topic ? getBulletsFromTopic(topic) : [];
+
   return (
     <div style={styles.chat}>
       <div style={styles.lexaBubbleWrap}>
         <LexaAvatar />
         <div>
           <div style={styles.lexaName}>Lexa – AI Coach</div>
-          <div style={styles.lexaBubble}> Hello! Before we start the practice session, let&apos;s give you a nice understanding about this <strong>introduction and interview</strong> system first! </div>
+          <div style={styles.lexaBubble}> Hello! Let&apos;s start with <strong>{topicTitle}</strong>. Before we begin, let me explain the system. </div>
         </div>
       </div>
       <div style={styles.contentAlign}>
-        <p style={styles.instructionLabel}>Please carefully read the instructions below before proceed the practice session</p>
-        <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>I will include <strong>2 speaking topics</strong> with <strong>4 question</strong> for each topic, so <strong>8 questions in total.</strong></span></div>
-        <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>You will have to speak for the total of <strong>4–5 minutes</strong> for 8 questions.</span></div>
+        <p style={styles.instructionLabel}>Topic Overview</p>
+        <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span><strong>{topicTitle}</strong></span></div>
+        <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>{topicPrompt}</span></div>
         <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Keep your answers reasonable while treating it like a casual conversation.</span></div>
+        <DetailBubbleList label="Bullet bubbles" items={bullets} accent="#166534" />
         <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)", pointerEvents: "none", zIndex: 0 }}><PulseRing color="#ef4444" size={220} /></div>
       </div>
     </div>
   );
 }
 
-function IntroPagePart2() {
+function IntroPagePart2({ topic }: { topic: Topic | null; bullets?: string[] }) {
+  const topicTitle = topic?.title ?? "Cue Card Topic";
+
   return (
     <div style={styles.chat}>
       <div style={styles.lexaBubbleWrap}>
         <LexaAvatar />
         <div>
           <div style={styles.lexaName}>Lexa – AI Coach</div>
-          <div style={styles.lexaBubble}> Hello, again! Before we start the practice session, let’s give you a nice understanding about this <strong>individual long turn system</strong> first! </div>
+          <div style={styles.lexaBubble}> Now for <strong>Part 2</strong> — let's talk about: <strong>{topicTitle}</strong> </div>
         </div>
       </div>
       <div style={styles.contentAlign}>
         <p style={styles.instructionLabel}>Please carefully read the instructions below before proceed the practice session</p>
-        <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>I will give you a question based on the chosen unit</span></div>
+        <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>Topic: <strong>{topicTitle}</strong></span></div>
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>The cue card will opens and you get 1 minute to think about what you’re going to say. You can make some notes to help you if you wish.</span></div>
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>The cue card will closes and you will got the chance to speak for up to 2 minutes.</span></div>
         <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Focus on covering all bullet points clearly and finish with a short summary.</span></div>
@@ -426,11 +507,16 @@ function IntroPagePart2() {
 
 function IntroPagePart3({
   topic,
+  bullets,
+  isLoading,
 }: {
   topic: Topic | null;
+  bullets?: string[];
+  isLoading?: boolean;
 }) {
   const topicTitle = topic?.title ?? "Part 3 Discussion";
   const topicPrompt = topic?.prompt ?? "I will ask you some follow-up questions related to this topic.";
+  const bulletItems = bullets ?? (topic ? getBulletsFromTopic(topic) : []);
 
   return (
     <div style={styles.chat}>
@@ -446,17 +532,133 @@ function IntroPagePart3({
         <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>{topicPrompt}</span></div>
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>You will have to speak for the total of <strong>4–5 minutes</strong> for this part.</span></div>
         <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Be natural and keep answers concise but informative.</span></div>
+        {isLoading && (
+          <div style={styles.infoCard}>
+            <span style={styles.infoIcon}>i</span>
+            <span>Loading Part 3 content from the admin unit...</span>
+          </div>
+        )}
+        <DetailBubbleList label="Bullet bubbles" items={bulletItems} accent="#166534" />
       </div>
     </div>
   );
 }
 
-function SessionPage({ messages, isRecording, setIsRecording, recError, setRecError, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript }: SessionPageProps) {
+function SessionPage({ topic, questions = [], messages: msgProp, isRecording, setIsRecording, recError, setRecError, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, onSaveQuestionTranscripts }: SessionPageProps & { questions?: string[] }) {
+  // Generate messages from topic if available, otherwise use provided messages or default
+  const messages = msgProp || (topic ? [
+    { role: "lexa", text: `Let's talk about ${topic.title}. ${topic.prompt || "Please share your thoughts."}` }
+  ] : [
+    { role: "lexa", text: "Good morning, my name is Lexa. What's your name?" }
+  ]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const isStoppingRef = useRef(false);
+  const stoppingIntentionalRef = useRef(false);
+  const transcriptRef = useRef<string>("");
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const questionIndexRef = useRef<number>(0);
+  const [questionTranscripts, setQuestionTranscripts] = useState<string[]>([]);
+  const perQuestionAccumRef = useRef<string[]>([]);
+
+  // When questionTranscripts updates, notify parent outside render phase
+  useEffect(() => {
+    try {
+      if (onSaveQuestionTranscripts) onSaveQuestionTranscripts(questionTranscripts);
+    } catch (e) {
+      console.debug("[Lexa] onSaveQuestionTranscripts error:", e);
+    }
+  }, [questionTranscripts, onSaveQuestionTranscripts]);
+
+  useEffect(() => {
+    setQuestionIndex(0);
+    questionIndexRef.current = 0;
+    // initialize per-question transcripts to match incoming questions
+    const init = Array(questions.length).fill("");
+    setQuestionTranscripts(init);
+    perQuestionAccumRef.current = init.slice();
+  }, [questions.join("|")]);
+
+  const activeQuestion = questions[questionIndex] ?? null;
+  const hasMoreQuestions = questionIndex < questions.length - 1;
+
+  // Build per-question display for the live transcript card.
+  const currentSavedAnswer = (questionTranscripts[questionIndex] || "").trim();
+  const displayTranscript = recError
+    ? recError
+    : (liveTranscript && liveTranscript.trim())
+      ? liveTranscript
+      : (interimTranscript && interimTranscript.trim())
+        ? interimTranscript
+        : isRecording
+          ? (transcriptRef.current || "")
+          : (currentSavedAnswer || "Start speaking...");
+
+  // Build a conversation flow combining initial messages, questions and per-question user transcripts
+  const conversationMessages: ChatMessage[] = [];
+  // start with system/intro messages
+  conversationMessages.push(...messages);
+
+  // for each question up to current index, append question and its user reply (if any)
+  const upto = Math.min(questionIndex, questions.length - 1);
+  for (let i = 0; i <= upto; i++) {
+    const q = questions[i];
+    if (q) conversationMessages.push({ role: "lexa", text: q });
+    const userAns = questionTranscripts[i];
+    if (userAns && userAns.trim()) conversationMessages.push({ role: "user", text: userAns.trim() });
+  }
+
+  // include the active question if it's the current one (so it shows even before user answers)
+  if (activeQuestion && (questionIndex <= questions.length - 1)) {
+    // Only append if an identical Lexa question isn't already present
+    const alreadyHas = conversationMessages.some((m) => m.role === "lexa" && m.text === activeQuestion);
+    if (!alreadyHas) conversationMessages.push({ role: "lexa", text: activeQuestion });
+  }
+
+  const advanceQuestion = () => {
+    if (!hasMoreQuestions) return;
+
+    setRecError(null);
+    setIsRecording(false);
+    setLiveTranscript("");
+    setInterimTranscript("");
+    if (recognitionRef.current) {
+      try {
+        // prefer stop() so final result can be delivered before advancing
+        isStoppingRef.current = true;
+        try { recognitionRef.current.stop(); } catch { recognitionRef.current.abort(); }
+      } catch {}
+      // leave onend to clear recognitionRef and isStoppingRef
+    }
+    setQuestionIndex((prev) => {
+      const next = prev + 1;
+      questionIndexRef.current = next;
+      // ensure accumulator for the next question starts empty
+      perQuestionAccumRef.current[next] = perQuestionAccumRef.current[next] || "";
+      return next;
+    });
+  };
+  
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    // Only auto-advance if the CURRENT question already has a saved answer.
+    // This avoids skipping the next question when the global transcript contains previous answers.
+    const currentAnswered = Boolean((questionTranscripts[questionIndexRef.current] || "").trim());
+    if (currentAnswered && hasMoreQuestions) {
+      advanceQuestion();
+      setTimeout(() => startRecording(), 120);
+      return;
+    }
+
+    startRecording();
+  };
   
   const startRecording = async () => {
     setRecError(null);
+    console.debug("[Lexa] startRecording called", { questionIndex: questionIndexRef.current });
     // PERBAIKAN 3: Jangan hapus permanen transcript disini agar tidak ter-wipe di tengah jalan
     setLiveTranscript("");
     setInterimTranscript("");
@@ -478,34 +680,103 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
+    // base live transcript on current question's saved answer so new question starts empty
+    transcriptRef.current = (questionTranscripts[questionIndexRef.current] || "").trim();
+    // ensure accumulator exists for this question
+    perQuestionAccumRef.current[questionIndexRef.current] = perQuestionAccumRef.current[questionIndexRef.current] || "";
     
-    recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      let finalResult = "";
+    recognition.onresult = (event: any) => {
+      console.debug("[Lexa] onresult fired", { questionIndex: questionIndexRef.current });
+      let accumulatedFinal = "";
       let interimResult = "";
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) finalResult += event.results[i][0].transcript + " ";
-        else interimResult += event.results[i][0].transcript;
+
+      // 🔥 PERBAIKAN 1: Loop selalu dari 0 agar tidak terjadi double accumulation dari resultIndex
+      for (let i = 0; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          accumulatedFinal += event.results[i][0].transcript + " ";
+        } else {
+          interimResult += event.results[i][0].transcript;
+        }
       }
-      
-      if (finalResult) {
-        setTranscript((prev) => {
-          const updated = prev + finalResult;
-          setLiveTranscript(updated + interimResult);
-          return updated;
-        });
-      } else {
-        setLiveTranscript(transcript + interimResult);
-      }
+
+      // 🔥 PERBAIKAN 2: Gunakan landasan teks awal saat mic dinyalakan,
+      // lalu gabungkan dengan hasil baru (bukan pakai += yang bikin teks numpuk)
+      const baseSpeech = (questionTranscripts[questionIndexRef.current] || "").trim();
+      const totalFinalText = (baseSpeech ? baseSpeech + " " : "") + accumulatedFinal;
+
+      transcriptRef.current = totalFinalText.trim();
+
+      // Sinkronkan ke live transcription card
+      setLiveTranscript(totalFinalText + interimResult);
       setInterimTranscript(interimResult);
+
+      // 🔥 PERBAIKAN 3: Simpan langsung ke state tanpa perQuestionAccumRef yang bikin konflik
+      const idxForSave = questionIndexRef.current;
+      setTranscript(totalFinalText.trim());
+
+      setQuestionTranscripts((prevArr) => {
+        const copy = prevArr && prevArr.length ? [...prevArr] : Array(questions.length).fill("");
+        copy[idxForSave] = totalFinalText.trim();
+        return copy;
+      });
     };
 
     recognition.onerror = (e: SpeechRecognitionErrorEventLike) => {
-      // Abaikan error 'aborted' yang di-trigger saat menghentikan/abort
+      console.debug("[Lexa] onerror", e, { questionIndex: questionIndexRef.current });
       if (e.error === "aborted") return;
-      if (e.error !== "no-speech") setRecError(`Error: ${e.error}`);
+      // if browser reports no-speech, just restart listening (don't abort session)
+      if (e.error === "no-speech") {
+        setInterimTranscript("");
+        setLiveTranscript(transcriptRef.current || "");
+        try { if (recognitionRef.current && !isStoppingRef.current) recognitionRef.current.start(); } catch {}
+        return;
+      }
+      setRecError(`Error: ${e.error}`);
+      // finalize interim + transcriptRef as the final answer for current question
+      const finalText = ((transcriptRef.current || "") + (interimTranscript || "")).trim();
+      if (finalText) {
+        const idxForSave = questionIndexRef.current;
+        // ensure per-question accum has the final text
+        perQuestionAccumRef.current[idxForSave] = (perQuestionAccumRef.current[idxForSave] || "") + finalText;
+        setTimeout(() => {
+          setQuestionTranscripts((prevArr) => {
+            const copy = prevArr && prevArr.length ? [...prevArr] : Array(questions.length).fill("");
+            copy[idxForSave] = perQuestionAccumRef.current[idxForSave] || "";
+            return copy;
+          });
+          console.debug("[Lexa] onerror persisted perQuestionAccumRef for idx", idxForSave, perQuestionAccumRef.current[idxForSave]);
+        }, 0);
+      }
+      try { if (recognitionRef.current) { isStoppingRef.current = true; recognitionRef.current.abort(); } } catch {}
+      recognitionRef.current = null;
+      setIsRecording(false);
     };
 
     recognition.onend = () => {
+      // If onend triggered because we intentionally stopped, finalize current question
+      if (stoppingIntentionalRef.current) {
+        stoppingIntentionalRef.current = false;
+        const finalText = ((transcriptRef.current || "") + (interimTranscript || "")).trim();
+        if (finalText) {
+          const idxForSave = questionIndexRef.current;
+          // accumulate and persist
+          perQuestionAccumRef.current[idxForSave] = (perQuestionAccumRef.current[idxForSave] || "") + finalText;
+          setTimeout(() => {
+            setQuestionTranscripts((prevArr) => {
+              const copy = prevArr && prevArr.length ? [...prevArr] : Array(questions.length).fill("");
+              copy[idxForSave] = perQuestionAccumRef.current[idxForSave] || "";
+              return copy;
+            });
+            console.debug("[Lexa] onend persisted perQuestionAccumRef for idx", idxForSave, perQuestionAccumRef.current[idxForSave]);
+            // advance after short delay so UI updates show saved answer first
+            setTimeout(() => { try { if (hasMoreQuestions) advanceQuestion(); } catch {} }, 120);
+          }, 0);
+        }
+        try { recognitionRef.current = null; } catch {}
+        setIsRecording(false);
+        return;
+      }
+
       // Jika tidak sedang berhenti sengaja, coba restart agar continuous listening tetap bekerja.
       if (recognitionRef.current && !isStoppingRef.current) {
         try { recognition.start(); } catch {}
@@ -518,15 +789,20 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     setIsRecording(true);
   };
 
+  // Ensure transcriptRef starts with current saved transcript when beginning to record
+  // so liveTranscript builds correctly and old saved transcript doesn't appear as "live".
+
   const stopRecording = () => {
     setIsRecording(false);
+    console.debug("[Lexa] stopRecording called", { questionIndex: questionIndexRef.current });
     if (recognitionRef.current) {
+      stoppingIntentionalRef.current = true;
       try {
-        isStoppingRef.current = true;
-        recognitionRef.current.abort();
+        // prefer stop() so final results are delivered
+        try { recognitionRef.current.stop(); }
+        catch (e) { recognitionRef.current.abort(); }
       } catch (err) { console.log(err); }
-      recognitionRef.current = null;
-      isStoppingRef.current = false;
+      // do not finalize here — onend will handle finalization
     }
   };
 
@@ -542,30 +818,48 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
     };
   }, [setIsRecording]);
 
+  const questionRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (questionRef.current) {
+      try { questionRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch {}
+    }
+  }, [questionIndex]);
+
   return (
     <div style={styles.chat}>
-      {messages.map((m, i) => (
-        <div key={i} style={styles.lexaBubbleWrap}>
-          <LexaAvatar />
-          <div>
-            <div style={styles.lexaName}>Lexa – AI Coach</div>
-            <div style={styles.lexaBubble}>{m.text}</div>
+      {conversationMessages.map((m, i) => (
+        m.role === "lexa" ? (
+          <div key={"l-" + i} style={styles.lexaBubbleWrap}>
+            <LexaAvatar />
+            <div>
+              <div style={styles.lexaName}>Lexa – AI Coach</div>
+              <div style={styles.lexaBubble}>{m.text}</div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div key={"u-" + i} style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <div style={{ maxWidth: "642px", marginLeft: 40, marginRight: 10 }}>
+              <div style={{ ...styles.userBubble }}>{m.text}</div>
+            </div>
+            <div style={styles.userAvatar}>D</div>
+          </div>
+        )
       ))}
+      {/* activeQuestion moved below the listening card to appear as next chat bubble */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", width: "100%", marginTop: 24, paddingRight: 20, boxSizing: "border-box", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <div style={styles.userAvatar}>D</div>
-          <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>davinzata</span>
+          <span style={{ fontSize: 16, color: "#6b7280", fontWeight: 500 }}>davinzata</span>
         </div>
         <div style={{ ...styles.listeningCard, width: "100%", maxWidth: "450px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-            <button onClick={() => isRecording ? stopRecording() : startRecording()} style={{ ...styles.recordBtn, background: isRecording ? "#fff" : "rgba(255,255,255,0.2)", color: isRecording ? "#ef4444" : "#fff" }}> ● </button>
+            <button onClick={toggleRecording} style={{ ...styles.recordBtn, background: isRecording ? "#fff" : "rgba(255,255,255,0.2)", color: isRecording ? "#ef4444" : "#fff" }}> ● </button>
             <span style={{ fontSize: 14, color: "#fff", fontWeight: 500 }}>{isRecording ? "Listening..." : "Click microphone to talk"}</span>
           </div>
           <div style={styles.transcriptBox}>
             <span style={{ fontSize: 12, color: "#C95B5B", fontWeight: 600 }}>Live Audio Transcription</span>
-            <p style={{ fontSize: 15, color: "#374151", margin: "6px 0 0 0" }}>{recError || liveTranscript || transcript || interimTranscript || "Start speaking..."}</p>
+            <p style={{ fontSize: 15, color: "#374151", margin: "6px 0 0 0" }}>{displayTranscript}</p>
           </div>
         </div>
       </div>
@@ -573,9 +867,12 @@ function SessionPage({ messages, isRecording, setIsRecording, recError, setRecEr
   );
 }
 
-function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRecError }: SessionPagePart2Props) {
+function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRecError, topic, bullets, isLoading }: SessionPagePart2Props) {
   const recognitionRef = useRef<any>(null);
   const [isFlipped, setIsFlipped] = useState(false);
+  const topicTitle = topic?.title ?? "Cue Card Topic";
+  const topicPrompt = topic?.prompt ?? "Describe the topic naturally and cover all bullet points.";
+  const bulletItems = bullets ?? (topic ? getBulletsFromTopic(topic) : []);
 
   // 1. TAMBAHKAN USEEFFECT CLEANUP (SANGAT PENTING!)
   // Menjamin jika user pindah halaman atau sesi selesai, mikrofon diputus paksa
@@ -658,7 +955,6 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
             <div style={styles.lexaBubble}>The session will start soon, good luck!</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {/* Balon peringatan orange sesuai mockup kedua */}
               <div style={{ ...styles.tipCard, background: "#fff7ed", border: "1px solid #fed7aa", color: "#c2410c", borderRadius: "12px", padding: "10px 14px", margin: 0, display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: "500" }}>
                 <span>⚠️ You can definitely say more about this!</span>
               </div>
@@ -702,12 +998,12 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
             boxSizing: "border-box"
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-              <span style={{ fontSize: "14px", fontWeight: 600, color: "#f87171" }}>Topic 1 – Memorable Event</span>
-              <span style={{ fontSize: "14px", fontWeight: 600, color: "#166534" }}>Cue Card Open</span>
+              <span style={{ fontSize: "14px", fontWeight: 600, color: "#f87171" }}>{topicTitle}</span>
+              <span style={{ fontSize: "14px", fontWeight: 700, color: "#b91c1c" }}>Cue Card Open</span>
             </div>
 
             <h2 style={{ fontSize: "28px", fontWeight: 500, color: "#000000", margin: "0 0 24px 0", lineHeight: 1.3 }}>
-              Describe something you own which is very important to you.
+              {topicPrompt}
             </h2>
 
             <span style={{ fontSize: "12px", fontWeight: 700, color: "#C95B5B", display: "block", marginBottom: "16px", letterSpacing: "0.05em" }}>
@@ -715,20 +1011,20 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
             </span>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "flex-start" }}>
-              {[
-                "Where you got it from",
-                "How long you have had it",
-                "What you used it for",
-                "Explain why it is so important to you"
-              ].map((text, idx) => (
-                <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: "20px", padding: "6px 16px", color: "#C95B5B", fontSize: "14px", fontWeight: "500" }}>
-                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #C95B5B", borderRadius: "50%", width: "16px", height: "16px", fontSize: "11px", fontWeight: "700" }}>
+              {(bulletItems.length ? bulletItems : ["No admin bullets found for this topic yet."]).map((text, idx) => (
+                <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "20px", padding: "7px 16px", color: "#b91c1c", fontSize: "14px", fontWeight: "600" }}>
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #b91c1c", borderRadius: "50%", width: "18px", height: "18px", fontSize: "11px", fontWeight: "700" }}>
                     {idx + 1}
                   </span>
                   {text}
                 </div>
               ))}
             </div>
+            {isLoading && (
+              <div style={{ marginTop: "12px", fontSize: "12px", color: "#6b7280" }}>
+                Loading cue card from admin unit...
+              </div>
+            )}
             <div style={{ position: "absolute", bottom: "16px", right: "20px", fontSize: "12px", color: "#9ca3af" }}>
               💡 Click to flip and start speaking
             </div>
@@ -792,7 +1088,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
                 <span style={{ fontWeight: "600" }}>Audio Transcription</span>
               </div>
               <p style={{ fontSize: "15px", color: "#111827", margin: 0, lineHeight: 1.5 }}>
-                {recError || liveTranscript || transcript || interimTranscript || "Start speaking..."}
+                {recError || liveTranscript || interimTranscript || transcript || "Start speaking..."}
               </p>
             </div>
           </div>
@@ -812,16 +1108,68 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   );
 }
 
-function ResultPage({ transcript }: ResultPageProps) {
-  const scoreData: ScoreData = {
-    overall: "9.0",
-    metrics: [
-      { id: "fluency", label: "Fluency", score: "9.0", text: "Excellent speech flow with natural pauses." },
-      { id: "vocabulary", label: "Vocabulary", score: "9.0", text: "Rich and idiomatic vocabulary used accurately." },
-      { id: "grammar", label: "Grammar", score: "9.0", text: "Complex sentence structures with zero errors." },
-      { id: "pronunciation", label: "Pronunciation", score: "9.0", text: "Clear pronunciation and perfect intonation." },
-    ],
-    recommendation: "Maintain your consistency and try speaking on varied abstract topics to secure this band score."
+function ResultPage({ transcript, topic, partLabel }: ResultPageProps) {
+  const [evaluation, setEvaluation] = useState<any>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+
+  const rubricItems = useMemo(() => {
+    return (topic?.details || [])
+      .map((detail) => ({
+        title: detail.content.trim(),
+        rubric: detail.rubric?.trim() || "",
+      }))
+      .filter((item) => item.rubric.length > 0);
+  }, [topic]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const runAnalysis = async () => {
+      setAnalysisLoading(true);
+      try {
+        const response = await fetch("/api/evaluate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            transcript: transcript.trim(),
+            topicTitle: topic?.title ?? partLabel,
+            topicPrompt: topic?.prompt ?? "",
+            rubricItems: rubricItems.map((item) => `${item.title}${item.rubric ? `: ${item.rubric}` : ""}`),
+            partLabel,
+          }),
+        });
+
+        const data = (await response.json()) as any;
+        if (!cancelled) {
+          setEvaluation(data);
+        }
+      } catch (error) {
+        console.error("Failed to evaluate speaking result:", error);
+        if (!cancelled) {
+          setEvaluation(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setAnalysisLoading(false);
+        }
+      }
+    };
+
+    void runAnalysis();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [partLabel, rubricItems, topic?.prompt, topic?.title, transcript]);
+
+  const scoreData: EvaluationResult = evaluation ?? {
+    overall: "-",
+    level: "Waiting",
+    metrics: [],
+    recommendation: "Analyzing transcript...",
+    analysis: "AI analysis will appear after the transcript is processed.",
   };
 
   return (
@@ -832,10 +1180,10 @@ function ResultPage({ transcript }: ResultPageProps) {
           <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fecaca", color: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold" }}>D</div>
         </div>
         <div style={{ background: "#C95B5B", color: "#fff", borderRadius: "12px 12px 0px 12px", padding: "12px 18px", fontSize: "14px", maxWidth: "600px", lineHeight: 1.5 }}>
-          {/* PERBAIKAN 5: Teks tiruan "Work each year..." SUDAH DIHAPUS BERSIH */}
           {transcript.trim() ? transcript.trim() : "No audio transcription captured for this session."}
         </div>
       </div>
+
       <div style={styles.lexaBubbleWrap}>
         <LexaAvatar />
         <div>
@@ -843,27 +1191,53 @@ function ResultPage({ transcript }: ResultPageProps) {
           <div style={styles.lexaBubble}><strong>Time is up!</strong> Here’s my feedback of our practice session this time.</div>
         </div>
       </div>
-      <div style={{ background: "#ffffff", border: "1px solid #f3f4f6", borderRadius: "16px", padding: "32px", boxShadow: "0 4px 24px rgba(0,0,0,0.02)", position: "relative", width: "calc(100% - 44px)", marginLeft: "44px", boxSizing: "border-box" }}>
-        <div style={{ position: "absolute", top: "32px", right: "32px", color: "#C95B5B", border: "1.5px solid #C95B5B", borderRadius: "50%", width: "18px", height: "18px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "bold" }}>i</div>
+
+      <div style={{ background: "#ffffff", border: "1px solid #f3f4f6", borderRadius: "16px", padding: "24px", boxShadow: "0 4px 24px rgba(0,0,0,0.02)", position: "relative", width: "calc(100% - 44px)", marginLeft: "44px", boxSizing: "border-box" }}>
+        <div style={{ position: "absolute", top: "24px", right: "24px", color: "#C95B5B", border: "1.5px solid #C95B5B", borderRadius: "50%", width: "18px", height: "18px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "bold" }}>i</div>
         <h3 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: "0 0 16px 0" }}>AI Coach Analysis</h3>
-        <div style={{ fontSize: "56px", fontWeight: 800, color: "#C95B5B", lineHeight: 1, marginBottom: "24px" }}>{scoreData.overall}</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px", marginBottom: "24px" }}>
-          {scoreData.metrics.map((m) => (
-            <div key={m.id} style={{ background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: "12px", padding: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{ color: "#166534" }}>
-                  <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2z"/>
-                </svg>
-                <span style={{ fontSize: "14px", fontWeight: 700, color: "#166534" }}>{m.label} {m.score}</span>
-              </div>
-              <p style={{ fontSize: "13px", color: "#166534", margin: 0, lineHeight: 1.4, fontWeight: "500" }}>{m.text}</p>
+
+        {analysisLoading ? (
+          <p style={{ fontSize: "14px", color: "#6b7280" }}>Analyzing transcript and admin rubric...</p>
+        ) : (
+          <>
+            <div style={{ marginBottom: "20px" }}>
+              <AnalysisCard
+                title="Speaking Result"
+                overallScore={scoreData.overall}
+                level={scoreData.level}
+                metrics={scoreData.metrics.map((metric) => ({
+                  label: metric.label,
+                  score: metric.score,
+                  description: metric.text,
+                }))}
+                recommendation={scoreData.recommendation}
+              />
             </div>
-          ))}
-        </div>
-        <div>
-          <h4 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: "0 0 8px 0" }}>Recommendation</h4>
-          <p style={{ fontSize: "13px", color: "#111827", margin: 0, lineHeight: 1.5 }}>{scoreData.recommendation}</p>
-        </div>
+
+            <div style={{ display: "grid", gap: "12px", marginBottom: "20px" }}>
+              <h4 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: 0 }}>AI Summary</h4>
+              <p style={{ fontSize: "14px", color: "#111827", margin: 0, lineHeight: 1.6 }}>{scoreData.analysis}</p>
+            </div>
+
+            <div style={{ display: "grid", gap: "12px" }}>
+              <h4 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: 0 }}>Admin Rubric {partLabel}</h4>
+              {rubricItems.length > 0 ? (
+                rubricItems.map((item, index) => (
+                  <div key={`${item.title}-${index}`} style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "14px" }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827", marginBottom: "6px" }}>
+                      {item.title || `Rubric ${index + 1}`}
+                    </div>
+                    <p style={{ fontSize: "13px", color: "#374151", margin: 0, lineHeight: 1.5 }}>{item.rubric}</p>
+                  </div>
+                ))
+              ) : (
+                <div style={{ background: "#f9fafb", border: "1px dashed #d1d5db", borderRadius: "12px", padding: "14px", color: "#6b7280", fontSize: "13px" }}>
+                  No admin rubric has been set for this part yet.
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -893,12 +1267,17 @@ const styles: Record<string, CSSProperties> = {
   lexaAvatar: { width: 40, height: 40, borderRadius: "100%", background: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, border: "1.5px solid #f5f5f5" },
   lexaName: { fontSize: 16, fontWeight: 700, color: "#C95B5B", marginBottom: 4 },
   lexaBubble: { background: "#ffffff", border: "1px solid #f3f4f6", borderRadius: "0 12px 12px 12px", padding: "10px 14px", fontSize: "16px", fontWeight: "500", color: "#000000", lineHeight: 1.6, maxWidth: "642px" },
+  userBubble: { background: "#fff", border: "1px solid #f3f4f6", borderRadius: "12px 12px 12px 0", padding: "10px 14px", fontSize: "16px", fontWeight: "500", color: "#374151", lineHeight: 1.6 },
   contentAlign: { marginLeft: 50, maxWidth: "642px", position: "relative" },
   instructionLabel: { fontSize: 14, color: "#6b7280", margin: "8px 0 12px 0" },
   infoCard: { display: "flex", alignItems: "flex-start", gap: 10, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#374151", marginBottom: "12px" },
   warningCard: { display: "flex", alignItems: "flex-start", gap: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#92400e", marginBottom: "12px" },
   tipCard: { display: "flex", alignItems: "flex-start", gap: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#166534", marginBottom: "12px" },
-  userAvatar: { width: 24, height: 24, borderRadius: "50%", background: "#fecaca", color: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold" },
+  detailSection: { marginLeft: 50, maxWidth: "642px", position: "relative" },
+  detailWrap: { display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 },
+  detailBubble: { display: "flex", alignItems: "center", gap: 8, border: "1px solid transparent", borderRadius: 20, padding: "8px 14px", fontSize: 14, fontWeight: 500, lineHeight: 1.5 },
+  detailIndex: { display: "flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", border: "1px solid currentColor", fontSize: 11, fontWeight: 700, flexShrink: 0 },
+  userAvatar: { width: 40, height: 40, borderRadius: "50%", background: "#fecaca", color: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold" },
   listeningCard: { background: "#C95B5B", borderRadius: "24px 0 24px 24px", padding: "16px", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" },
   recordBtn: { border: "none", borderRadius: "50%", width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" },
   transcriptBox: { marginTop: 10, background: "#fff", borderRadius: "12px", padding: "12px" },

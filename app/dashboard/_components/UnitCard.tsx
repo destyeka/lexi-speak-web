@@ -9,6 +9,9 @@ type UnitCardProps = {
   status?: string;
   price?: number | string;
   onStart?: () => void;
+  accent?: string;
+  partsCount?: number;
+  coreFocus?: boolean;
 };
 
 export default function UnitCard({
@@ -19,6 +22,9 @@ export default function UnitCard({
   status = "Active",
   price,
   onStart,
+  accent,
+  partsCount,
+  coreFocus = false,
 }: UnitCardProps) {
   return (
     <div
@@ -53,7 +59,15 @@ export default function UnitCard({
           )}
         </div>
 
-        {/* view-students icon removed per design */}
+        {/* parts badge */}
+        <div className="flex flex-col items-end">
+          {typeof partsCount === 'number' ? (
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white bg-gradient-to-r ${accent ?? 'from-primary to-rose-400'}`}>
+              {partsCount} Parts
+            </span>
+          ) : null}
+          {coreFocus ? <span className="mt-2 text-xs font-medium text-amber-600">Core focus</span> : null}
+        </div>
       </div>
 
       {/* Status and label row */}
@@ -66,7 +80,7 @@ export default function UnitCard({
       {/* Progress bar */}
       <div className="mt-4">
         <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
-          <div className="h-full rounded-full bg-gradient-to-r from-primary to-rose-400" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+          <div className={`h-full rounded-full ${accent ? `bg-gradient-to-r ${accent}` : 'bg-gradient-to-r from-primary to-rose-400'}`} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
         </div>
         <div className="mt-2 text-xs text-gray-500">
           {Math.round(progress)}% complete

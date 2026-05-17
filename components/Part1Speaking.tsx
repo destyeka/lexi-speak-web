@@ -4,14 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { AIChatBubble } from "@/components/ui/system/AIChatBubble";
 import { CueCard } from "@/components/ui/system/CueCard";
 import { RecordingCard } from "@/components/ui/system/RecordingCard";
-import { IconButton } from "@/components/ui/system/IconButton";
+import IconButton from "@/components/ui/system/IconButton";
 import { TimerChip } from "@/components/ui/system/TimerChip";
-import {
-  ArrowLeftIcon,
-  SubtitlesIcon,
-  ArrowRightIcon,
-  ArrowLeftCircleIcon,
-} from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight, ArrowCircleLeft, ClosedCaptioning as Subtitles } from "phosphor-react";
 import { Timer } from "lucide-react";
 import type { Topic } from "@/lib/question-fetcher";
 import { getQuestionsFromTopic } from "@/lib/question-fetcher";
@@ -187,13 +182,13 @@ export function Part1Speaking({ topics, onBack, onComplete }: Part1SpeakingProps
       {/* Header */}
       <div className="flex w-full justify-between items-center mb-6 relative z-10">
         <div className="inline-flex justify-start items-center gap-6">
-          <IconButton variant="base" icon={ArrowLeftIcon} onClick={onBack} />
+          <IconButton variant="base" icon={ArrowLeft} onClick={onBack} />
           <h2 className="text-center justify-start text-black text-lg font-bold">
             Practice Part 1 - {currentTopic?.title}
           </h2>
         </div>
         <div className="inline-flex gap-6">
-          <IconButton variant="toggled" icon={SubtitlesIcon} />
+          <IconButton variant="toggled" icon={Subtitles} />
           <TimerChip icon={Timer} time={formatTime(elapsedTime)} className="bg-white/50" />
         </div>
       </div>
@@ -221,11 +216,11 @@ export function Part1Speaking({ topics, onBack, onComplete }: Part1SpeakingProps
             {/* Start button */}
             <div className="flex gap-3">
               {currentQuestionIndex > 0 || currentTopicIndex > 0 ? (
-                <button
+                  <button
                   onClick={goToPreviousQuestion}
                   className="px-6 py-3 bg-white/50 hover:bg-white/70 text-primary font-medium rounded-lg flex items-center gap-2"
                 >
-                  <ArrowLeftCircleIcon size={20} />
+                  <ArrowCircleLeft size={20} />
                   Previous
                 </button>
               ) : null}
@@ -281,7 +276,7 @@ export function Part1Speaking({ topics, onBack, onComplete }: Part1SpeakingProps
                 className="px-8 py-3 bg-primary hover:bg-blue-700 text-white font-bold rounded-lg flex items-center gap-2"
               >
                 {isLastQuestion && isLastTopic ? "Complete" : "Next"}
-                <ArrowRightIcon size={20} />
+                <ArrowRight size={20} />
               </button>
             </div>
           </>

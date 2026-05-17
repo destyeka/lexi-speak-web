@@ -844,6 +844,35 @@ create table if not exists public.topic_details (
 create index if not exists idx_topics_part on public.topics(part);
 create index if not exists idx_topic_details_topic_id on public.topic_details(topic_id);
 
+alter table public.session_units enable row level security;
+
+drop policy if exists "Allow read session_units" on public.session_units;
+create policy "Allow read session_units"
+on public.session_units
+for select
+to authenticated
+using (true);
+
+drop policy if exists "Admin manage session_units" on public.session_units;
+create policy "Admin manage session_units"
+on public.session_units
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+    and p.role = 'admin'
+  )
+)
+with check (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+    and p.role = 'admin'
+  )
+);
+
 alter table public.topics enable row level security;
 alter table public.topic_details enable row level security;
 
