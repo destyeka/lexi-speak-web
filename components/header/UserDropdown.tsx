@@ -56,11 +56,16 @@ export default function UserDropdown() {
 
       const metadataDisplayName = resolveMetadataName(user);
 
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from("profiles")
-        .select("full_name, name, first_name, last_name")
+        // Request only safe/common columns to avoid PostgREST 400 if schema differs
+        .select("id, email")
         .eq("id", user.id)
         .maybeSingle();
+
+      if (error) {
+        console.debug("profiles fetch error (UserDropdown):", error);
+      }
 
       const getDisplayName = () => {
         if (profile?.full_name) return profile.full_name;

@@ -12,6 +12,8 @@ type UnitCardProps = {
   accent?: string;
   partsCount?: number;
   coreFocus?: boolean;
+  score?: number | string | null;
+  scoreLabel?: string;
 };
 
 export default function UnitCard({
@@ -25,7 +27,11 @@ export default function UnitCard({
   accent,
   partsCount,
   coreFocus = false,
+  score,
+  scoreLabel = "Final score",
 }: UnitCardProps) {
+  const hasScore = score !== null && score !== undefined && score !== "";
+
   return (
     <div
       role="button"
@@ -64,6 +70,11 @@ export default function UnitCard({
           {typeof partsCount === 'number' ? (
             <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white bg-gradient-to-r ${accent ?? 'from-primary to-rose-400'}`}>
               {partsCount} Parts
+            </span>
+          ) : null}
+          {hasScore ? (
+            <span className="mt-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 shadow-sm ring-1 ring-emerald-100">
+              {scoreLabel}: {typeof score === 'number' ? score.toFixed(1) : score}
             </span>
           ) : null}
           {coreFocus ? <span className="mt-2 text-xs font-medium text-amber-600">Core focus</span> : null}

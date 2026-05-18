@@ -1,16 +1,11 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import type { ApexOptions } from "apexcharts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import UnitCard from "./UnitCard";
-
-const ReactApexChart = dynamic(() => import("react-apexcharts"), {
-  ssr: false,
-});
 
 type AppRole = "user" | "guru" | "admin";
 
@@ -35,7 +30,7 @@ type StudentScoreHistoryRow = {
   student_id: string;
   score: number;
   speaking_attempts: number;
-  unit_index: number | null;
+  unit_index?: number | null;
   part_index: number | null;
   recorded_at: string;
 };
@@ -113,6 +108,116 @@ const formatDelta = (delta: number) => {
   const sign = delta > 0 ? "+" : "";
   return `${sign}${delta.toFixed(1)}`;
 };
+
+const isSpeakingPartIndex = (partIndex: number | null | undefined) => partIndex === 1 || partIndex === 2 || partIndex === 3;
+
+// ==========================================
+// FORMAT SVG RADAR CHART YANG SUDAH DIPERBAIKI (GANTI BAGIAN INI)
+// ==========================================
+function SvgRadar({ 
+  values, 
+  size = 320
+}: { 
+  values: { fluency: number; lexical: number; grammar: number; pronunciation: number }; 
+  size?: number 
+}) {
+  const half = size / 2;
+  const radius = half - 48;
+
+  const categoriesShort = ["Fluency", "Lexical", "Grammar", "Pronunciation"];
+  const numbers = [values.fluency, values.lexical, values.grammar, values.pronunciation];
+  const fontSize = 16;
+
+  const polygonPoints = numbers
+    .map((value, index) => {
+      const angle = (Math.PI * 2 * index) / numbers.length - Math.PI / 2;
+      const distance = (value / 9) * radius;
+      return `${half + Math.cos(angle) * distance},${half + Math.sin(angle) * distance}`;
+    })
+    .join(' ');
+
+  return (
+    <div className="w-full h-64 flex items-center justify-center p-0">
+      <svg
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${size} ${size}`}
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        aria-label="Skill breakdown radar chart"
+        className="mx-auto block max-w-full"
+      >
+        <defs>
+          <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="6" stdDeviation="8" floodColor="#000" floodOpacity="0.06" />
+          </filter>
+        </defs>
+
+        {Array.from({ length: 3 }).map((_, ringIndex) => {
+          const ringRadius = ((ringIndex + 1) / 3) * radius;
+          const ringPoints = numbers
+            .map((_, index) => {
+              const angle = (Math.PI * 2 * index) / numbers.length - Math.PI / 2;
+              return `${half + Math.cos(angle) * ringRadius},${half + Math.sin(angle) * ringRadius}`;
+            })
+            .join(' ');
+          return <polygon key={ringIndex} points={ringPoints} fill="none" stroke="#eef2f7" strokeWidth={1} />;
+        })}
+
+        {numbers.map((_, index) => {
+          const angle = (Math.PI * 2 * index) / numbers.length - Math.PI / 2;
+          const x2 = half + Math.cos(angle) * radius;
+          const y2 = half + Math.sin(angle) * radius;
+          return <line key={index} x1={half} y1={half} x2={x2} y2={y2} stroke="#eef2f7" strokeWidth={1} />;
+        })}
+
+        <g filter="url(#softShadow)">
+          <polygon
+            points={polygonPoints}
+            fill="#C95B5B"
+            fillOpacity={0.18}
+            stroke="#C95B5B"
+            strokeWidth={2}
+          />
+        </g>
+
+        {numbers.map((value, index) => {
+          const angle = (Math.PI * 2 * index) / numbers.length - Math.PI / 2;
+          const px = half + Math.cos(angle) * ((value / 9) * radius);
+          const py = half + Math.sin(angle) * ((value / 9) * radius);
+
+          // Place short label inside the chart near the outer ring but within viewBox
+          const labelRadius = radius - 12;
+          const lx = half + Math.cos(angle) * labelRadius;
+          const ly = half + Math.sin(angle) * labelRadius;
+
+          const diffX = lx - half;
+          const anchor: 'start' | 'middle' | 'end' = Math.abs(diffX) < 8 ? 'middle' : diffX > 0 ? 'start' : 'end';
+
+          return (
+            <g key={index}>
+              <circle cx={px} cy={py} r={4.5} fill="#C95B5B" />
+              <text
+                x={lx}
+                y={ly}
+                fontSize={fontSize}
+                textAnchor={anchor}
+                fill="#475569"
+                dominantBaseline="middle"
+                className="font-medium"
+              >
+                {categoriesShort[index]}
+                <tspan x={lx} dy={fontSize + 2} fill="#C95B5B" fontWeight={700} fontSize={fontSize - 1}>
+                  ({value.toFixed(1)})
+                </tspan>
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 type ChatPartProps = {
   eyebrow: string;
@@ -291,6 +396,13 @@ export default function RoleOverviewPanel({
   const [connectingCoach, setConnectingCoach] = useState(false);
   const [progress, setProgress] = useState<StudentProgressRow | null>(null);
   const [historyRows, setHistoryRows] = useState<StudentScoreHistoryRow[]>([]);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [activeTab, setActiveTab] = useState<number>(1);
+  const [historyDetailModal, setHistoryDetailModal] = useState<{
+    open: boolean;
+    unit_index: number | null;
+    part_index: number | null;
+  }>({ open: false, unit_index: null, part_index: null });
 
   useEffect(() => {
     const load = async () => {
@@ -356,7 +468,33 @@ export default function RoleOverviewPanel({
     };
 
     void load();
-  }, [expectedRole, router]);
+  }, [expectedRole, refreshToken, router]);
+
+  useEffect(() => {
+    const refreshDashboard = () => {
+      setRefreshToken((current) => current + 1);
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "lexa:practice-progress-updated") {
+        refreshDashboard();
+      }
+    };
+
+    window.addEventListener("lexa:practice-progress-updated", refreshDashboard);
+    window.addEventListener("storage", handleStorage);
+
+    return () => {
+      window.removeEventListener("lexa:practice-progress-updated", refreshDashboard);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (historyDetailModal.open) {
+      setActiveTab(historyDetailModal.part_index || 1);
+    }
+  }, [historyDetailModal.open, historyDetailModal.part_index]);
 
   const createdLabel = useMemo(() => {
     if (!profile?.created_at) return "-";
@@ -370,10 +508,15 @@ export default function RoleOverviewPanel({
 
   const latestBand = useMemo(() => formatBand(progress?.latest_score ?? null), [progress?.latest_score]);
 
+  const scoredHistoryRows = useMemo(
+    () => historyRows.filter((row) => isSpeakingPartIndex(row.part_index)),
+    [historyRows]
+  );
+
   const previousBand = useMemo(() => {
-    if (historyRows.length < 2) return null;
-    return formatBand(historyRows[historyRows.length - 2]?.score ?? null);
-  }, [historyRows]);
+    if (scoredHistoryRows.length < 2) return null;
+    return formatBand(scoredHistoryRows[scoredHistoryRows.length - 2]?.score ?? null);
+  }, [scoredHistoryRows]);
 
   const weeklyDelta = useMemo(() => {
     if (historyRows.length === 0) return 0;
@@ -381,17 +524,17 @@ export default function RoleOverviewPanel({
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const recentRows = historyRows.filter((row) => new Date(row.recorded_at) >= sevenDaysAgo);
+    const recentRows = scoredHistoryRows.filter((row) => new Date(row.recorded_at) >= sevenDaysAgo);
     if (recentRows.length < 2) return 0;
 
     const firstBand = formatBand(recentRows[0]?.score ?? null) ?? 0;
     const lastBand = formatBand(recentRows[recentRows.length - 1]?.score ?? null) ?? 0;
     return lastBand - firstBand;
-  }, [historyRows]);
+  }, [scoredHistoryRows]);
 
   const progressTrend = useMemo(() => {
-    const categories = historyRows.map((row) => new Date(row.recorded_at).toLocaleDateString());
-    const data = historyRows.map((row) => formatBand(row.score) ?? 0);
+    const categories = scoredHistoryRows.map((row) => new Date(row.recorded_at).toLocaleDateString());
+    const data = scoredHistoryRows.map((row) => formatBand(row.score) ?? 0);
 
     const options: ApexOptions = {
       chart: {
@@ -429,7 +572,7 @@ export default function RoleOverviewPanel({
       series: [{ name: "Band score", data }],
       hasData: data.length > 0,
     };
-  }, [historyRows]);
+  }, [scoredHistoryRows]);
 
   const skillBreakdown = useMemo(() => {
     const base = latestBand ?? 0;
@@ -448,7 +591,7 @@ export default function RoleOverviewPanel({
         toolbar: { show: false },
         fontFamily: "Outfit, sans-serif",
       },
-      colors: ["#465FFF"],
+      colors: ["#C95B5B"],
       stroke: { width: 2 },
       fill: {
         opacity: 0.18,
@@ -480,10 +623,6 @@ export default function RoleOverviewPanel({
       values,
     };
   }, [latestBand, progress?.progress_percent]);
-
-  const practiceHistoryRows = useMemo(() => {
-    return [...historyRows].slice(-8).reverse();
-  }, [historyRows]);
 
   const aiFeedback = useMemo(() => {
     if (latestBand === null) {
@@ -524,17 +663,103 @@ export default function RoleOverviewPanel({
     },
     {
       label: "Practice Count",
-      value: `${historyRows.length}`,
+      value: `${scoredHistoryRows.length}`,
       meta: "Saved speaking sessions",
     },
   ];
 
+  const partAverages = useMemo(() => {
+    if (scoredHistoryRows.length === 0) {
+      return { part1: 0, part2: 0, part3: 0, overall: 0 };
+    }
+
+    const part1Scores = scoredHistoryRows.filter((row) => row.part_index === 1).map((row) => formatBand(row.score) || 0);
+    const part2Scores = scoredHistoryRows.filter((row) => row.part_index === 2).map((row) => formatBand(row.score) || 0);
+    const part3Scores = scoredHistoryRows.filter((row) => row.part_index === 3).map((row) => formatBand(row.score) || 0);
+
+    const calcAvg = (scores: number[]) => scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+
+    const part1 = calcAvg(part1Scores);
+    const part2 = calcAvg(part2Scores);
+    const part3 = calcAvg(part3Scores);
+    const overall = calcAvg([...part1Scores, ...part2Scores, ...part3Scores]);
+
+    return { part1, part2, part3, overall };
+  }, [scoredHistoryRows]);
+
+  const historyBySession = useMemo(() => {
+    const sessionMap = new Map<string, StudentScoreHistoryRow[]>();
+    
+    scoredHistoryRows.forEach((row) => {
+      const dateKey = new Date(row.recorded_at).toLocaleDateString();
+      const sessions = sessionMap.get(dateKey) || [];
+      sessions.push(row);
+      sessionMap.set(dateKey, sessions);
+    });
+
+    const sessions: Array<{
+      date: string;
+      entries: StudentScoreHistoryRow[];
+      avgScore: number;
+      parts: Set<number>;
+    }> = [];
+
+    sessionMap.forEach((entries, date) => {
+      const scores = entries.map((e) => formatBand(e.score) || 0);
+      const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const parts = new Set(entries.map((e) => e.part_index).filter((p): p is number => p !== null));
+      sessions.push({ date, entries, avgScore, parts });
+    });
+
+    return sessions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [scoredHistoryRows]);
+
+  const latestFinalScoreByUnit = useMemo(() => {
+    type UnitScoreState = {
+      summaryScore?: number;
+      parts: Map<number, number>;
+    };
+
+    const unitScores = new Map<number, UnitScoreState>();
+
+    [...historyRows]
+      .sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime())
+      .forEach((row) => {
+        const unitIndex = row.unit_index ?? 1;
+        const state = unitScores.get(unitIndex) ?? { parts: new Map<number, number>() };
+
+        if (row.part_index === null) {
+          if (state.summaryScore === undefined) {
+            state.summaryScore = formatBand(row.score) ?? 0;
+          }
+        } else if (isSpeakingPartIndex(row.part_index) && !state.parts.has(row.part_index)) {
+          state.parts.set(row.part_index, formatBand(row.score) ?? 0);
+        }
+
+        unitScores.set(unitIndex, state);
+      });
+
+    const finalScores = new Map<number, number>();
+
+    unitScores.forEach((state, unitIndex) => {
+      if (state.summaryScore !== undefined) {
+        finalScores.set(unitIndex, state.summaryScore);
+        return;
+      }
+
+      const part1 = state.parts.get(1);
+      const part2 = state.parts.get(2);
+      const part3 = state.parts.get(3);
+
+      if (part1 !== undefined && part2 !== undefined && part3 !== undefined) {
+        finalScores.set(unitIndex, Number(((part1 + part2 + part3) / 3).toFixed(1)));
+      }
+    });
+
+    return finalScores;
+  }, [historyRows]);
+
   const [unitCards, setUnitCards] = useState<JourneyUnitCard[]>([]);
-
-  
-  
-  
-
   const [dynamicUnitCards, setDynamicUnitCards] = useState<JourneyUnitCard[]>([]);
   const effectiveUnitCards = dynamicUnitCards.length ? dynamicUnitCards : unitCards;
 
@@ -565,7 +790,6 @@ export default function RoleOverviewPanel({
           return;
         }
 
-        // If admin created topics but didn't create session_units, build units from topics grouping
         if ((!sessionUnits || sessionUnits.length === 0) && topics && topics.length > 0) {
           const groups = new Map<string, any[]>();
           topics.forEach((t: any) => {
@@ -585,14 +809,22 @@ export default function RoleOverviewPanel({
 
             group.forEach((t: any) => {
               const details = Array.isArray(t.topic_details) ? t.topic_details : [];
-              if (t.part === 1) details.filter((d: any) => d.type === "question").forEach((d: any) => part1Items.push({ prompt: d.content, reply: "" }));
+
+              if (t.part === 1) {
+                details.filter((d: any) => d.type === "question").forEach((d: any) => part1Items.push({ prompt: d.content, reply: "" }));
+              }
+
               if (t.part === 2) {
                 part2Content.title = t.title || part2Content.title;
                 part2Content.prompt = t.prompt || part2Content.prompt;
-                const bullets = details.filter((d: any) => d.type === "bullet").sort((a: any,b:any)=> (a.order_index||0)-(b.order_index||0)).map((d:any)=>d.content);
-                part2Content.points = bullets.slice(0,4);
+                const bullets = details.filter((d: any) => d.type === "bullet").sort((a: any, b: any) => (a.order_index || 0) - (b.order_index || 0)).map((d: any) => d.content);
+                part2Content.points = bullets.slice(0, 4);
+                part2Content.takeaway = part2Content.takeaway || "Synchronized from admin";
               }
-              if (t.part === 3) details.filter((d: any) => d.type === "question").forEach((d: any) => part3Items.push({ prompt: d.content, reply: "" }));
+
+              if (t.part === 3) {
+                details.filter((d: any) => d.type === "question").forEach((d: any) => part3Items.push({ prompt: d.content, reply: "" }));
+              }
             });
 
             return {
@@ -602,7 +834,7 @@ export default function RoleOverviewPanel({
               title: part2Content.title || group[0]?.title || `Unit ${idx + 1}`,
               subtitle: "Learn mode",
               price: 0,
-              topic: part2Content.title || group[0]?.title || "",
+              topic: part2Content.prompt || group[0]?.prompt || part2Content.title || group[0]?.title || "",
               description: group[0]?.prompt || "",
               accent: "from-brand-500 to-brand-300",
               actionLabel: "Open Learn Hub",
@@ -620,11 +852,8 @@ export default function RoleOverviewPanel({
           return;
         }
 
-        // Build cards from session_units, populated with topic data
         const safeSessionUnits = sessionUnits ?? [];
         const cards: JourneyUnitCard[] = safeSessionUnits.map((unit: any) => {
-          // Find all topics for this unit. Prefer explicit unit_id, but fallback
-          // to matching by session_code / seq if admin created topics without unit_id.
           const seqFormatted = String(unit.seq ?? "").padStart(4, "0");
           const modePrefix = unit.type === "test" ? "TS" : "PT";
           const unitTopics = topics.filter((t: any) => {
@@ -632,13 +861,11 @@ export default function RoleOverviewPanel({
             const code = (t.topic_code || "").toString();
             if (!code) return false;
             if (unit.session_code && code.includes(unit.session_code)) return true;
-            if (code.includes(`${modePrefix}%-${seqFormatted}-P`.replace("%",""))) return true;
-            // also match by seq pattern fragment
+            if (code.includes(`${modePrefix}%-${seqFormatted}-P`.replace("%", ""))) return true;
             if (code.includes(`-${seqFormatted}-P`)) return true;
             return false;
           });
-          
-          // Build part contents from all topics for this unit
+
           const part1Items: any[] = [];
           const part3Items: any[] = [];
           let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;
@@ -682,7 +909,7 @@ export default function RoleOverviewPanel({
             title: unit.title ?? `Unit ${unit.seq}`,
             subtitle: modeLabel,
             price: unit.price ?? 0,
-            topic: topicTitle,
+            topic: topicPrompt || topicTitle,
             description: unit.description ?? (unit.mode === "test" ? "Strict practice. The order is locked and the coach is connected at test start." : "Flexible practice. Open any part first, then move in your own order."),
             accent,
             actionLabel,
@@ -717,7 +944,7 @@ export default function RoleOverviewPanel({
   const completedPartsByUnit = useMemo(() => {
     const unitMap = new Map<number, Set<number>>();
 
-    historyRows.forEach((row) => {
+    scoredHistoryRows.forEach((row) => {
       const unitIndex = row.unit_index ?? 1;
       const partIndex = row.part_index ?? 1;
       if (!unitMap.has(unitIndex)) {
@@ -727,7 +954,18 @@ export default function RoleOverviewPanel({
     });
 
     return unitMap;
+  }, [scoredHistoryRows]);
+
+  const lastOpenedUnitIndex = useMemo(() => {
+    if (!historyRows || historyRows.length === 0) return null;
+    const last = historyRows[historyRows.length - 1];
+    return last.unit_index ?? null;
   }, [historyRows]);
+
+  const displayedUnits = useMemo(() => {
+    if (lastOpenedUnitIndex !== null) return effectiveUnitCards.filter((u) => u.unitIndex === lastOpenedUnitIndex);
+    return effectiveUnitCards.length > 0 ? [effectiveUnitCards[0]] : [];
+  }, [lastOpenedUnitIndex, effectiveUnitCards]);
 
   const getUnitProgress = (unitIndex: number) => {
     const completedCount = completedPartsByUnit.get(unitIndex)?.size ?? 0;
@@ -915,6 +1153,8 @@ export default function RoleOverviewPanel({
                   accent={unit.accent}
                   partsCount={unit.parts?.length}
                   coreFocus={unit.unitIndex === 2}
+                  score={latestFinalScoreByUnit.get(unitIndex) ?? null}
+                  scoreLabel="Final"
                   onStart={() => router.push(`/learn?mode=test&unit=${unitIndex}&part=1&autostart=1`) }
                 />
               );
@@ -925,7 +1165,7 @@ export default function RoleOverviewPanel({
     );
   }
 
-  // Full dashboard view
+ // Full dashboard view
   return (
     <section className="space-y-6">
       <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
@@ -949,356 +1189,351 @@ export default function RoleOverviewPanel({
         </div>
       </div>
 
+      {/* Rangkuman Kartu Nilai */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {summaryCards.map((card) => (
+          <div key={card.label} className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+            <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">{card.label}</p>
+            <p className="mt-2 text-2xl font-bold text-gray-800 dark:text-white/90">{card.value}</p>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{card.meta}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* 🔴 SPEAKING SESSION HISTORY & DETAIL BUTTON (FIXED STATE TRIGGER) */}
       <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-        <p className="text-sm text-gray-500 dark:text-gray-400">Quick Access</p>
-        <div className="mt-3 flex flex-wrap gap-3">
-          <Link
-            href="/dashboard/profile"
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
-          >
-            Open Profile
-          </Link>
-          <Link
-            href="/dashboard/notifications"
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
-          >
-            View Notifications
-          </Link>
+        <div>
+          <h3 className="text-base font-semibold text-gray-800 dark:text-white/90">Speaking Session History</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">View your practice sessions and scores breakdown by part.</p>
+        </div>
+        <div className="mt-4 divide-y divide-gray-100 dark:divide-gray-800">
+          {historyBySession.length === 0 ? (
+            <p className="text-sm text-gray-500 py-2">No practice history available.</p>
+          ) : (
+            historyBySession.map((session, i) => (
+              <div key={i} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                <div>
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">{session.date}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Parts: {Array.from(session.parts).sort().join(", ")} • {session.entries.length} attempts
+                  </p>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-brand-600 dark:text-brand-400">{session.avgScore.toFixed(1)}</p>
+                    <p className="text-[10px] text-gray-400 uppercase">avg score</p>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      const targetUnit = session.entries?.[0]?.unit_index ?? 1;
+                      const targetPart = session.entries?.[0]?.part_index ?? 1;
+                      setHistoryDetailModal({
+                        open: true,
+                        unit_index: targetUnit,
+                        part_index: targetPart
+                      });
+                    }}
+                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800 cursor-pointer"
+                  >
+                    Detail
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
-      {expectedRole === "user" ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {summaryCards.map((card) => (
-            <div key={card.label} className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-              <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">{card.label}</p>
-              <p className="mt-2 text-2xl font-bold text-gray-800 dark:text-white/90">{card.value}</p>
-              <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{card.meta}</p>
-            </div>
-          ))}
+      {/* 🔴 AI FEEDBACK BOX + THEMED PDF (WARNA MERAH MAROON & ORANGE ELEGAN) */}
+      <div className="rounded-2xl border border-red-200 bg-red-50/50 p-5 dark:border-red-500/20 dark:bg-red-500/5 mt-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-#C95B5B dark:text-red-300">AI Feedback Section</h3>
+            <p className="text-xs text-red-600 dark:text-red-400">Generated from your latest band and trend.</p>
+          </div>
+          <button 
+            type="button"
+            onClick={() => {
+              const printWindow = window.open('', '_blank');
+              if (printWindow) {
+                printWindow.document.write(`
+                  <html>
+                    <head>
+                      <title>IELTS Speaking Report - ${userEmail}</title>
+                      <style>
+                        body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; color: #1e293b; background-color: #fafbfd; }
+                        .header { background: linear-gradient(135deg, #dc2626, #ea580c); color: white; padding: 30px; border-radius: 16px; margin-bottom: 25px; }
+                        .header h1 { margin: 0; font-size: 22pt; font-weight: 700; }
+                        .header p { margin: 5px 0 0 0; opacity: 0.95; font-size: 11pt; }
+                        .info-grid { display: flex; gap: 15px; margin-bottom: 25px; }
+                        .card { flex: 1; background: white; border: 1px solid #e2e8f0; padding: 15px; border-radius: 12px; }
+                        .card-label { font-size: 8pt; text-transform: uppercase; color: #64748b; font-weight: bold; }
+                        .card-val { font-size: 16pt; font-weight: bold; color: #1e293b; margin-top: 5px; }
+                        .feedback-box { border: 1px solid #fca5a5; background: #fff5f5; padding: 20px; border-radius: 12px; margin-bottom: 25px; }
+                        .feedback-box h3 { margin-top: 0; color: #991b1b; font-size: 13pt; }
+                        ul { padding-left: 20px; margin: 0; }
+                        li { margin-bottom: 8px; font-size: 10.5pt; color: #7f1d1d; }
+                        @media print {
+                          body { background: white; padding: 0; }
+                          .header { background: linear-gradient(135deg, #dc2626, #ea580c) !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                          .feedback-box { background: #fff5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        }
+                      </style>
+                    </head>
+                    <body>
+                      <div class="header">
+                        <h1>IELTS Speaking Performance Report</h1>
+                        <p>Official AI Hub Diagnostic Evaluation Summary</p>
+                      </div>
+                      <div class="info-grid">
+                        <div class="card"><div class="card-label">Email Account</div><div class="card-val" style="font-size: 11pt; word-break: break-all;">${userEmail}</div></div>
+                        <div class="card"><div class="card-label">Estimated Band</div><div class="card-val">${latestBand !== null ? latestBand.toFixed(1) : 'N/A'}</div></div>
+                        <div class="card"><div class="card-label">Current Level</div><div class="card-val" style="font-size: 11pt;">${getCurrentLevelLabel(latestBand)}</div></div>
+                      </div>
+                      <div class="feedback-box">
+                        <h3>AI Performance Review & Recommendation:</h3>
+                        <ul>${aiFeedback.map(point => `<li>${point}</li>`).join('')}</ul>
+                      </div>
+                      <p style="font-size: 9pt; color: #94a3b8; text-align: center; margin-top: 50px;">Generated automatically via Lexa Speak IELTS Dashboard on ${new Date().toLocaleDateString()}</p>
+                      <script>window.onload = function() { window.print(); setTimeout(function() { window.close(); }, 500); }</script>
+                    </body>
+                  </html>
+                `);
+                printWindow.document.close();
+              }
+            }}
+            className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 transition cursor-pointer"
+          >
+            Download PDF Report
+          </button>
         </div>
-      ) : null}
+        <div className="mt-3">
+          <p className="text-xs font-bold text-red-800 dark:text-red-400 uppercase tracking-wider">Latest Review</p>
+          <ul className="mt-1 space-y-2 list-disc list-inside text-sm text-red-900/80 dark:text-gray-300">
+            {aiFeedback.map((point, i) => (
+              <li key={i}>{point}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
 
-      {/* Unit modal */}
-      {modalUnitIndex !== null && (() => {
-        const unit = effectiveUnitCards[modalUnitIndex - 1] as any;
-        const unitIndex = modalUnitIndex;
-        if (!unit) return null;
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="absolute inset-0 bg-black/40" onClick={closeUnitModal} />
-            <div className="relative w-full max-w-2xl rounded-2xl bg-white p-6 shadow-lg">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">{unit.title}</h3>
-                  <p className="text-sm text-gray-500">{unit.subtitle}</p>
-                </div>
-                <button onClick={closeUnitModal} className="text-sm text-gray-500">Close</button>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                {unit.parts.map((part: any) => {
-                  const partProgress = getPartProgress(unitIndex, part.id);
-                  return (
-                    <div key={part.id} className="rounded-lg border border-gray-100 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-semibold text-gray-900">{part.title}</div>
-                          <div className="text-xs text-gray-500">{part.hint}</div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => handleUnitPartClick(unitIndex, part.id)} className="rounded-full bg-brand-500 px-3 py-1 text-xs text-white">Open chat session</button>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex items-center gap-3">
-                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
-                          <div className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-300" style={{ width: `${partProgress}%` }} />
-                        </div>
-                        <div className="text-xs text-gray-500">{partProgress.toFixed(1)}%</div>
-                      </div>
+      {/* ==================== SEKSI UNITS & RADAR CHART ==================== */}
+      <div className="grid gap-4 xl:grid-cols-[1.3fr_0.9fr]">
+        <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+          <p className="text-sm font-medium text-gray-800 dark:text-white/90">Units</p>
+          <div className="mt-4 grid gap-4 grid-cols-1">
+            {displayedUnits.map((unit) => {
+              const unitProgress = getUnitProgress(unit.unitIndex);
+              return (
+                <div key={unit.id} className="relative overflow-hidden rounded-[20px] border border-gray-100 p-14 shadow-sm dark:border-gray-800 bg-white">
+                  <h4 className="text-4xl font-bold text-gray-800 dark:text-white/90">{unit.title}</h4>
+                  <p className="text-sm text-gray-500 mt-1">{unit.subtitle}</p>
+                  <p className="mt-4 text-base text-gray-700 dark:text-gray-300">{unit.topic}</p>
+                  <div className="mt-6 h-2.5 rounded-full bg-gray-100 dark:bg-gray-800">
+                    <div className={`h-full rounded-full bg-gradient-to-r ${unit.accent}`} style={{ width: `${unitProgress}%` }} />
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-sm text-gray-500">
+                    <span>{unitProgress}% complete</span>
+                    <div className="flex items-center gap-3">
+                      <button type="button" onClick={() => openUnitModal(unit.unitIndex)} className="text-brand-600 font-medium">View Parts</button>
+                      <button onClick={() => router.push(`/learn?unit=${unit.unitIndex}&part=1&autostart=1`)} className="rounded-md bg-brand-500 px-3 py-1 text-sm text-white">Start</button>
                     </div>
-                  );
-                })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Radar Chart */}
+        <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
+          <p className="text-sm font-medium text-gray-800 dark:text-white/90">Skill Breakdown</p>
+          <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/70 p-3 dark:border-gray-800 dark:bg-white/[0.02] overflow-visible">
+            <SvgRadar values={skillBreakdown.values} />
+          </div>
+        </div>
+      </div>
+{/* ==================== 🔴 SEKSI MODAL DETAIL EVALUASI (COMBINATION: CARDS + TABS FILTER LOGS) ==================== */}
+      {historyDetailModal.open && (() => {
+        // 1. Ambil semua baris data dari database untuk unit yang dipilih
+        const targetedRows = historyRows.filter(
+          (row) => row.unit_index === historyDetailModal.unit_index
+        );
+
+        // 2. Fungsi hitung statistik rata-rata untuk 3 Card di atas
+        const getPartStats = (pIndex: number) => {
+          const partRows = targetedRows.filter((r) => r.part_index === pIndex);
+          const attempts = partRows.length;
+          const scores = partRows.map((r) => formatBand(r.score) || 0);
+          const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+          return { attempts, avg };
+        };
+
+        const part1 = getPartStats(1);
+        const part2 = getPartStats(2);
+        const part3 = getPartStats(3);
+
+        // 3. Hitung total akumulasi rata-rata (Overall Sesi)
+        const allScores = targetedRows.map((r) => formatBand(r.score) || 0);
+        const overallAvg = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+
+        // Filter log pengerjaan di bagian bawah sesuai tab part yang aktif
+        const filteredLogs = targetedRows
+          .filter((row) => row.part_index === activeTab)
+          .sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in">
+            <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-gray-800">
+              
+              {/* Header Modal */}
+              <div className="flex items-start justify-between border-b border-gray-100 pb-4 dark:border-gray-800">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-950 dark:text-white">Practice Session Breakdown</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    Detailed analysis and average bandwidth for Unit {historyDetailModal.unit_index}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="inline-block rounded-xl bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 dark:bg-red-500/10 dark:text-red-400">
+                    Overall Avg: {overallAvg.toFixed(1)}
+                  </span>
+                </div>
               </div>
+
+              {/* SECTION 1: Grid 3 Kolom Card (Part 1, 2, 3 + Average) */}
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                {/* CARD PART 1 */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(1)}
+                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${
+                    activeTab === 1 
+                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10" 
+                      : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
+                  }`}
+                >
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 1</p>
+                  <div className="my-2">
+                    <span className="text-2xl font-extrabold text-gray-900 dark:text-white">
+                      {part1.attempts > 0 ? part1.avg.toFixed(1) : "-"}
+                    </span>
+                    {part1.attempts > 0 && <span className="text-xs text-gray-400 font-medium"> band</span>}
+                  </div>
+                  <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">
+                    {part1.attempts} {part1.attempts === 1 ? 'Attempt' : 'Attempts'}
+                  </p>
+                </button>
+
+                {/* CARD PART 2 */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(2)}
+                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${
+                    activeTab === 2 
+                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10" 
+                      : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
+                  }`}
+                >
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 2</p>
+                  <div className="my-2">
+                    <span className="text-2xl font-extrabold text-gray-900 dark:text-white">
+                      {part2.attempts > 0 ? part2.avg.toFixed(1) : "-"}
+                    </span>
+                    {part2.attempts > 0 && <span className="text-xs text-gray-400 font-medium"> band</span>}
+                  </div>
+                  <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">
+                    {part2.attempts} {part2.attempts === 1 ? 'Attempt' : 'Attempts'}
+                  </p>
+                </button>
+
+                {/* CARD PART 3 */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(3)}
+                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${
+                    activeTab === 3 
+                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10" 
+                      : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
+                  }`}
+                >
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 3</p>
+                  <div className="my-2">
+                    <span className="text-2xl font-extrabold text-gray-900 dark:text-white">
+                      {part3.attempts > 0 ? part3.avg.toFixed(1) : "-"}
+                    </span>
+                    {part3.attempts > 0 && <span className="text-xs text-gray-400 font-medium"> band</span>}
+                  </div>
+                  <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">
+                    {part3.attempts} {part3.attempts === 1 ? 'Attempt' : 'Attempts'}
+                  </p>
+                </button>
+              </div>
+
+              {/* SECTION 2: Filtered Logs Section Heading */}
+              <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-4 dark:border-gray-800">
+                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                  Detailed Session History — Part {activeTab}
+                </p>
+                <p className="text-[10px] text-gray-400 font-medium">Click an attempt row to open result page</p>
+              </div>
+
+              {/* SECTION 3: Penjabaran List Sesi Hasil Filter */}
+              <div className="mt-3 max-h-[180px] overflow-y-auto space-y-2 pr-1">
+                {filteredLogs.length === 0 ? (
+                  <p className="text-xs text-gray-500 text-center py-6">No practice session records found for Part {activeTab}.</p>
+                ) : (
+                  filteredLogs.map((record) => {
+                    const recordDate = new Date(record.recorded_at);
+                    const timeString = recordDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    const dateString = recordDate.toLocaleDateString([], { day: 'numeric', month: 'short' });
+
+                    return (
+                      <button
+                        key={record.id}
+                        type="button"
+                        onClick={() => {
+                          setHistoryDetailModal({ open: false, unit_index: null, part_index: null });
+                          router.push(`/learn/result?id=${record.id}`);
+                        }}
+                        className="w-full flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/40 p-2.5 text-left transition hover:border-red-300 hover:bg-red-50/20 dark:border-gray-800 dark:bg-white/[0.01] dark:hover:border-red-900/40 cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="text-[11px] font-medium text-gray-400 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 px-2 py-0.5 rounded-md">
+                            {dateString} • {timeString}
+                          </div>
+                          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                            {record.speaking_attempts} Speaking {record.speaking_attempts === 1 ? 'Attempt' : 'Attempts'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-lg bg-red-50 px-2 py-0.5 text-xs font-bold text-red-600 dark:bg-red-500/10 dark:text-red-400">
+                            Band {(formatBand(record.score) ?? 0).toFixed(1)}
+                          </span>
+                          <span className="text-[10px] text-gray-400 group-hover:text-red-500 transition font-medium">→</span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Footer Modal Controls */}
+              <div className="mt-5 flex justify-end border-t border-gray-100 pt-3 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setHistoryDetailModal({ open: false, unit_index: null, part_index: null })}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800 cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+
             </div>
           </div>
         );
       })()}
-
-      {expectedRole === "user" ? (
-        <div className="grid gap-4 xl:grid-cols-[1.3fr_0.9fr]">
-          <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">Units</p>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Practice speaking units — hover progress to preview parts.</p>
-              </div>
-              <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                Learn & Test
-              </span>
-            </div>
-
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              {effectiveUnitCards.length === 0 ? (
-                <div className="col-span-full rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
-                  No units configured by admin. Please contact your administrator to add units and topics.
-                </div>
-              ) : (
-                effectiveUnitCards.map((unit, idx) => {
-                  const unitIndex = idx + 1;
-                  const unitProgress = getUnitProgress(unitIndex);
-                  return (
-                    <div key={unit.id} className="relative overflow-hidden rounded-[20px] border border-gray-100 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] dark:border-gray-800 dark:bg-white/[0.02]">
-                      <div className={`pointer-events-none absolute -right-6 -top-8 h-28 w-28 rounded-full blur-3xl ${unit.accent}`} />
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">{unit.subtitle}</p>
-                          <h4 className="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">{unit.title}</h4>
-                        </div>
-                        <div className="flex flex-col items-end">
-                          <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white bg-gradient-to-r ${unit.accent}`}>3 Parts</span>
-                          {unitIndex === 2 ? <span className="mt-2 text-xs font-medium text-amber-600">Core focus</span> : null}
-                        </div>
-                      </div>
-
-                      <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-2">{unit.topic}</p>
-
-                      <div className="mt-4">
-                        <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800">
-                          <div className={`h-full rounded-full bg-gradient-to-r ${unit.accent}`} style={{ width: `${unitProgress}%` }} />
-                        </div>
-                        <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-                          <span>{unitProgress.toFixed(1)}% complete</span>
-                          <button onClick={() => openUnitModal(unitIndex)} className="text-xs font-medium text-brand-600">View</button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">Skill Breakdown</p>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Estimated IELTS skill profile.</p>
-              </div>
-              <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                Radar Chart
-              </span>
-            </div>
-
-            <div className="mt-4">
-              <ReactApexChart options={skillBreakdown.options} series={skillBreakdown.series} type="radar" height={320} />
-            </div>
-
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {[
-                ["Fluency", skillBreakdown.values.fluency],
-                ["Lexical", skillBreakdown.values.lexical],
-                ["Grammar", skillBreakdown.values.grammar],
-                ["Pronunciation", skillBreakdown.values.pronunciation],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-2xl bg-gray-50 px-4 py-3 dark:bg-white/[0.03]">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600 dark:text-gray-300">{label}</span>
-                    <span className="font-semibold text-gray-800 dark:text-white/90">{Number(value).toFixed(1)}</span>
-                  </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white dark:bg-gray-800">
-                    <div className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-300" style={{ width: `${(Number(value) / 9) * 100}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {expectedRole === "user" ? (
-        <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-          <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">AI Feedback Section</p>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Generated from your latest band and trend.</p>
-              </div>
-              <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                Latest Review
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {aiFeedback.map((point) => (
-                <div key={point} className="rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700 dark:bg-white/[0.03] dark:text-gray-300">
-                  {point}
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-white/[0.03] dark:text-gray-300">
-              <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Coach Notes</p>
-              <p className="mt-2">{progress?.notes ?? "No coach notes yet."}</p>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-gray-800 dark:text-white/90">Practice History Table</p>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Recent speaking sessions and saved bands.</p>
-              </div>
-              <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                {practiceHistoryRows.length} Rows
-              </span>
-            </div>
-
-            <div className="mt-4 overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-800">
-              <div className="max-h-[320px] overflow-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="sticky top-0 bg-gray-50 text-xs uppercase tracking-wide text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                    <tr>
-                      <th className="px-4 py-3">Date</th>
-                      <th className="px-4 py-3">Unit</th>
-                      <th className="px-4 py-3">Part</th>
-                      <th className="px-4 py-3">Band</th>
-                      <th className="px-4 py-3">Attempts</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {practiceHistoryRows.length > 0 ? (
-                      practiceHistoryRows.map((row) => (
-                        <tr key={row.id} className="border-t border-gray-100 dark:border-gray-800">
-                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{new Date(row.recorded_at).toLocaleDateString()}</td>
-                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{row.unit_index ?? 1}</td>
-                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{row.part_index ?? 1}</td>
-                          <td className="px-4 py-3 font-semibold text-gray-800 dark:text-white/90">{formatBand(row.score)?.toFixed(1) ?? "-"}</td>
-                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{row.speaking_attempts}</td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td className="px-4 py-8 text-center text-gray-500 dark:text-gray-400" colSpan={5}>
-                          No practice history yet.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {expectedRole === "user" ? (
-        <div className="grid gap-6 lg:grid-cols-2">
-                {effectiveUnitCards.map((unit, unitOffset) => {
-            const unitIndex = unitOffset + 1;
-            const unitProgress = getUnitProgress(unitIndex);
-
-            return (
-              <div
-                key={unit.id}
-                className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">{unit.subtitle}</p>
-                    <h3 className="mt-1 text-lg font-semibold text-gray-800 dark:text-white/90">{unit.title}</h3>
-                    <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{unit.description}</p>
-                  </div>
-                  <span className={`rounded-full bg-gradient-to-r ${unit.accent} px-3 py-1 text-xs font-semibold text-white`}>3 Parts</span>
-                </div>
-
-                {/* Progress bar + interactive segments */}
-                <div
-                  className="relative mt-4"
-                  onMouseEnter={() => setHoveredUnit(unitIndex)}
-                  onMouseLeave={() => {
-                    setHoveredUnit(null);
-                    setHoveredPart(null);
-                  }}
-                >
-                  <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                    <span>Overall progress</span>
-                    <span>{unitProgress.toFixed(1)}%</span>
-                  </div>
-
-                  <div className="relative mt-2 h-3 rounded-full bg-gray-100 dark:bg-gray-800">
-                    <div className={`absolute left-0 top-0 bottom-0 rounded-full bg-gradient-to-r ${unit.accent}`} style={{ width: `${unitProgress}%` }} />
-
-                    {unit.parts.map((part, idx) => {
-                      const segLeft = (idx / unit.parts.length) * 100;
-                      const segWidth = 100 / unit.parts.length;
-                      return (
-                        <div
-                          key={`seg-${unit.id}-${part.id}`}
-                          onMouseEnter={() => setHoveredPart(part.id)}
-                          onMouseLeave={() => setHoveredPart(null)}
-                          onClick={() => handleUnitPartClick(unitIndex, part.id)}
-                          className="absolute top-0 bottom-0"
-                          style={{ left: `${segLeft}%`, width: `${segWidth}%`, cursor: "pointer" }}
-                          aria-hidden
-                        />
-                      );
-                    })}
-
-                    {/* Tooltip when hovering a segment */}
-                    {hoveredPart && hoveredUnit === unitIndex && (() => {
-                      const idx = hoveredPart - 1;
-                      const segCenter = ((idx + 0.5) / unit.parts.length) * 100;
-                      const part = unit.parts[idx];
-                      const preview = part.id === 2 ? unit.journey.part2.prompt : (unit.journey[`part${part.id}` as keyof typeof unit.journey] as JourneyChatItem[])[0]?.prompt ?? "Preview";
-                      return (
-                        <div className="absolute -top-14 z-20 w-64 -translate-x-1/2 rounded-lg bg-white px-3 py-2 text-sm text-gray-700 shadow-lg ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-200" style={{ left: `${segCenter}%` }}>
-                          <div className="font-semibold">{part.hint}</div>
-                          <div className="mt-1 text-xs text-gray-500 line-clamp-2">{preview}</div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Reveal square preview cards only on hover of the progress area */}
-                  <div className={`mt-4 grid gap-4 md:grid-cols-3 transition-all ${hoveredUnit === unitIndex ? 'opacity-100 translate-y-0' : 'pointer-events-none opacity-0 -translate-y-2'}`}>
-                    {unit.parts.map((part) => {
-                      const pid = part.id;
-                      const partProgress = getPartProgress(unitIndex, pid);
-                      const isCore = pid === 2;
-                      const preview = isCore ? unit.journey.part2.prompt : (unit.journey[`part${pid}` as keyof typeof unit.journey] as JourneyChatItem[])[0]?.prompt ?? "";
-
-                      return (
-                        <button
-                          key={`card-${unit.id}-${pid}`}
-                          type="button"
-                          onClick={() => handleUnitPartClick(unitIndex, pid)}
-                          className={`w-full h-36 text-left rounded-[20px] border p-4 transition-transform ${isCore ? 'border-amber-200 bg-amber-50 shadow-lg' : 'border-gray-200 bg-white dark:bg-gray-900'}`}
-                          aria-label={`Open part ${pid}`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="sr-only">{`Part ${pid} ${part.title}`}</div>
-                            <div className="text-sm text-gray-500">{/* minimal visual */}</div>
-                            <div className={`h-8 w-8 rounded-full ${isCore ? 'bg-amber-200' : 'bg-gray-100'}`} />
-                          </div>
-                          <p className="mt-4 text-sm text-gray-700 dark:text-gray-300 line-clamp-3">{preview}</p>
-                          <div className="mt-4 flex items-center justify-between">
-                            <div className="h-2 flex-1 mr-3 overflow-hidden rounded-full bg-white dark:bg-gray-800">
-                              <div className={`h-full rounded-full ${isCore ? 'bg-amber-500' : 'bg-gradient-to-r from-brand-500 to-brand-300'}`} style={{ width: `${partProgress}%` }} />
-                            </div>
-                            <span className="text-xs text-gray-500 dark:text-gray-400">{partProgress.toFixed(0)}%</span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-
     </section>
   );
 }

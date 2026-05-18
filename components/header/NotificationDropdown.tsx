@@ -95,7 +95,8 @@ export default function NotificationDropdown() {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, email, role, created_at, full_name, name, first_name, last_name")
+        // Avoid selecting optional name columns that may not exist in all schemas
+        .select("id, email, role, created_at")
         .order("created_at", { ascending: false })
         .limit(6);
 

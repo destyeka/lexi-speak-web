@@ -20,7 +20,7 @@ export function AlertCard({
   className = "",
 }: AlertCardProps) {
   const base =
-    "p-4 rounded-2xl shadow-[1px_2px_12px_0px_rgba(217,217,217,0.50)] outline outline-1 outline-offset-[-1px] inline-flex gap-3";
+    "p-4 rounded-2xl shadow-[1px_2px_12px_0px_rgba(217,217,217,0.50)] border border-gray-200 dark:border-gray-800 inline-flex gap-3 bg-white dark:bg-gray-900";
 
   const variants = {
     success:

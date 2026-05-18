@@ -89,6 +89,7 @@ create table if not exists public.student_progress (
   last_unit_index integer,
   last_part_index integer,
   notes text,
+  metrics jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now(),
   updated_by uuid references public.profiles(id) on delete set null
 );
@@ -105,17 +106,30 @@ alter table public.student_progress
 alter table public.student_progress
   add column if not exists last_part_index integer;
 
+alter table public.student_progress
+  add column if not exists metrics jsonb not null default '[]'::jsonb;
+
 -- 2d) Student score history (for trend charts)
 create table if not exists public.student_score_history (
   id bigint generated always as identity primary key,
   student_id uuid not null references public.profiles(id) on delete cascade,
   score numeric(5,2) not null check (score >= 0 and score <= 100),
+  metrics jsonb not null default '[]'::jsonb,
   speaking_attempts integer not null default 1 check (speaking_attempts >= 0),
   unit_index integer,
   part_index integer,
   recorded_at timestamptz not null default now(),
   recorded_by uuid references public.profiles(id) on delete set null
 );
+
+alter table public.student_score_history
+  add column if not exists unit_index integer;
+
+alter table public.student_score_history
+  add column if not exists part_index integer;
+
+alter table public.student_score_history
+  add column if not exists metrics jsonb not null default '[]'::jsonb;
 
 create index if not exists student_score_history_student_idx on public.student_score_history(student_id);
 create index if not exists student_score_history_recorded_at_idx on public.student_score_history(recorded_at desc);
@@ -125,10 +139,15 @@ returns trigger
 language plpgsql
 as $$
 begin
+  if current_setting('app.skip_student_progress_history', true) = 'on' then
+    return new;
+  end if;
+
   if new.latest_score is not null then
     insert into public.student_score_history (
       student_id,
       score,
+      metrics,
       speaking_attempts,
       unit_index,
       part_index,
@@ -138,6 +157,7 @@ begin
     values (
       new.student_id,
       new.latest_score,
+      coalesce(new.metrics, '[]'::jsonb),
       coalesce(new.speaking_attempts, 0),
       new.last_unit_index,
       new.last_part_index,
@@ -165,13 +185,17 @@ create or replace function public.record_student_practice_progress(
   last_activity_at timestamptz,
   last_unit_index integer,
   last_part_index integer,
-  notes text
+  notes text,
+  metrics jsonb
 )
 returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  attempt_increment integer := greatest(coalesce(speaking_attempts, 0), 1);
+  next_attempts integer;
 begin
   if not exists (
     select 1
@@ -181,6 +205,8 @@ begin
   ) then
     raise exception 'only student accounts can record practice progress';
   end if;
+
+  perform set_config('app.skip_student_progress_history', 'on', true);
 
   insert into public.student_progress (
     student_id,
@@ -198,7 +224,7 @@ begin
     auth.uid(),
     latest_score,
     progress_percent,
-    coalesce(speaking_attempts, 0),
+    attempt_increment,
     coalesce(last_activity_at, now()),
     last_unit_index,
     last_part_index,
@@ -210,13 +236,35 @@ begin
   set
     latest_score = excluded.latest_score,
     progress_percent = excluded.progress_percent,
-    speaking_attempts = excluded.speaking_attempts,
+    speaking_attempts = coalesce(speaking_attempts, 0) + attempt_increment,
     last_activity_at = excluded.last_activity_at,
     last_unit_index = excluded.last_unit_index,
     last_part_index = excluded.last_part_index,
     notes = excluded.notes,
     updated_at = excluded.updated_at,
-    updated_by = excluded.updated_by;
+    updated_by = excluded.updated_by
+  returning speaking_attempts into next_attempts;
+
+  insert into public.student_score_history (
+    student_id,
+    score,
+    metrics,
+    speaking_attempts,
+    unit_index,
+    part_index,
+    recorded_at,
+    recorded_by
+  )
+  values (
+    auth.uid(),
+    latest_score,
+    coalesce(metrics, '[]'::jsonb),
+    coalesce(next_attempts, attempt_increment),
+    last_unit_index,
+    last_part_index,
+    coalesce(last_activity_at, now()),
+    auth.uid()
+  );
 end;
 $$;
 
@@ -527,7 +575,8 @@ on public.student_score_history
 for insert
 to authenticated
 with check (
-  public.is_admin()
+  student_id = auth.uid()
+  or public.is_admin()
   or public.is_assigned_coach(student_id)
 );
 
@@ -543,19 +592,6 @@ on public.student_score_history
 for delete
 to authenticated
 using (public.is_admin());
-
--- Helper function to check if student is member (security definer to avoid recursion)
-create or replace function public.student_is_class_member(p_student_id uuid, p_class_id uuid)
-returns boolean
-language sql
-security definer
-set search_path = public
-as $$
-  select exists(
-    select 1 from public.class_members 
-    where student_id = p_student_id and class_id = p_class_id
-  );
-$$;
 
 -- 5d) RLS policies & Function for Classes [NEW]
 alter table public.classes enable row level security;

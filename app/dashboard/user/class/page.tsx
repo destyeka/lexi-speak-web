@@ -253,35 +253,40 @@ export default function StudentClassPage() {
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Masukkan kode join untuk gabung kelas. Setelah berhasil kamu akan melihat kartu kelas di bawah.</p>
         </div>
 
-        <div className="grid gap-6">
-          <div className="rounded-3xl border border-gray-300 bg-white p-6 shadow-[0_6px_20px_rgba(15,23,42,0.08)] max-w-3xl mx-auto">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-              <div className="flex-1">
-                <InputField
-                  value={joinCode}
-                  onChange={setJoinCode}
-                  placeholder="Masukkan join code..."
-                  className="w-full bg-white text-gray-900 outline-gray-300"
-                />
-              </div>
-              <TextButton
-                onClick={handleJoinClass}
-                disabled={submitting}
-                variant="primary"
-                className="w-full sm:w-auto"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <PlusIcon size={18} weight="fill" />
-                  Request Join
-                </span>
-              </TextButton>
+      <div className="grid gap-6 mb-6">
+        {/* PERBAIKAN: Menghapus max-w-3xl dan mx-auto, diganti dengan w-full */}
+        <div className="w-full rounded-3xl border border-gray-300 bg-white p-6 shadow-[0_6px_20px_rgba(15,23,42,0.08)]">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="flex-1">
+              <InputField
+                value={joinCode}
+                onChange={setJoinCode}
+                placeholder="Masukkan join code..."
+                className="w-full bg-white text-gray-900 outline-gray-300"
+              />
             </div>
-            {message ? (
-              <p className="mt-4 text-sm text-gray-800">{message}</p>
-            ) : (
-              <p className="mt-4 text-sm text-gray-600">Setelah memasukkan kode, coach akan menerima permintaanmu dan dapat approve atau decline.</p>
-            )}
+            <TextButton
+              onClick={handleJoinClass}
+              disabled={submitting}
+              variant="primary"
+              className="w-full sm:w-auto"
+            >
+              <span className="inline-flex items-center gap-2">
+                <PlusIcon size={18} weight="fill" />
+                Request Join
+              </span>
+            </TextButton>
           </div>
+          
+          {message ? (
+            <p className="mt-4 text-sm text-gray-800">{message}</p>
+          ) : (
+            <p className="mt-4 text-sm text-gray-600">
+              Setelah memasukkan kode, coach akan menerima permintaanmu dan dapat approve atau decline.
+            </p>
+          )}
+        </div>
+      </div>
 
           <div className="space-y-4">
             {joinedClasses.length === 0 ? (
@@ -321,7 +326,6 @@ export default function StudentClassPage() {
             )}
           </div>
         </div>
-      </div>
     </main>
   );
 }

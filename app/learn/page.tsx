@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
 import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
+import { supabase } from "@/lib/supabase";
 import {
   getBulletsFromTopic,
   getQuestionsFromTopic,
@@ -61,6 +62,9 @@ interface ResultPageProps {
   transcript: string;
   topic: Topic | null;
   partLabel: string;
+  unitIndex: number | null;
+  partIndex: number;
+  mode?: "learn" | "test" | null;
 }
 
 interface MetricData {
@@ -154,7 +158,87 @@ function DetailBubbleList({
   );
 }
 
+async function persistPracticeResult({
+  transcript,
+  topic,
+  partLabel,
+  partIndex,
+  unitIndex,
+}: {
+  transcript: string;
+  topic: Topic | null;
+  partLabel: string;
+  partIndex: number;
+  unitIndex: number | null;
+}) {
+  const trimmedTranscript = transcript.trim();
+  if (!trimmedTranscript) return;
+
+  const rubricItems = (topic?.details || [])
+    .map((detail) => ({
+      title: detail.content.trim(),
+      rubric: detail.rubric?.trim() || "",
+    }))
+    .filter((item) => item.rubric.length > 0);
+
+  const response = await fetch("/api/evaluate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      transcript: trimmedTranscript,
+      topicTitle: topic?.title ?? partLabel,
+      topicPrompt: topic?.prompt ?? "",
+      rubricItems: rubricItems.map((item) => `${item.title}${item.rubric ? `: ${item.rubric}` : ""}`),
+      partLabel,
+    }),
+  });
+
+  if (!response.ok) return;
+
+  const evaluation = (await response.json()) as any;
+  const latestScore = Number(evaluation.overall);
+  if (!Number.isFinite(latestScore)) return;
+
+  const progressPercent = Number(Math.max(0, Math.min(100, (latestScore / 9) * 100)).toFixed(1));
+  const metricPayload = Array.isArray(evaluation.metrics)
+    ? evaluation.metrics.map((metric: MetricData) => ({
+        id: metric.id,
+        label: metric.label,
+        score: Number(metric.score),
+        text: metric.text,
+      }))
+    : [];
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) return;
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (sessionError || !accessToken) return;
+
+  await fetch("/api/student-practice-progress", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      latest_score: latestScore,
+      progress_percent: progressPercent,
+      speaking_attempts: 1,
+      last_activity_at: new Date().toISOString(),
+      last_unit_index: unitIndex,
+      last_part_index: partIndex,
+      notes: evaluation.recommendation ?? null,
+      metrics: metricPayload,
+    }),
+  });
+}
+
 export default function LexaPracticeSession() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [page, setPage] = useState<PageValue>(PAGES.INTRO);
   const [time, setTime] = useState(0);
@@ -178,6 +262,8 @@ export default function LexaPracticeSession() {
 
   const unitId = searchParams.get("unit");
   const mode = searchParams.get("mode") as "learn" | "test" | null;
+  const unitIndex = Number.parseInt(unitId ?? "", 10);
+  const resolvedUnitIndex = Number.isFinite(unitIndex) ? unitIndex : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -278,20 +364,45 @@ export default function LexaPracticeSession() {
     const remainingText = liveTranscript.trim() || interimTranscript.trim();
 
     if (page === PAGES.PART3_SESSION) {
+      const finalTranscript = (transcriptPart3 + (remainingText ? ` ${remainingText}` : "")).trim();
       if (remainingText && !transcriptPart3.includes(remainingText)) {
-        setTranscriptPart3((prev) => (prev + " " + remainingText).trim());
+        setTranscriptPart3(finalTranscript);
       }
       setPage(PAGES.PART3_RESULT);
     } else if (page === PAGES.PART2_SESSION) {
+      const finalTranscript = (transcriptPart2 + (remainingText ? ` ${remainingText}` : "")).trim();
       if (remainingText && !transcriptPart2.includes(remainingText)) {
-        setTranscriptPart2((prev) => (prev + " " + remainingText).trim());
+        setTranscriptPart2(finalTranscript);
       }
-      setPage(PAGES.PART2_RESULT);
+      if (mode === "test") {
+        void persistPracticeResult({
+          transcript: finalTranscript,
+          topic: part2Topic,
+          partLabel: "Part 2",
+          partIndex: 2,
+          unitIndex: resolvedUnitIndex,
+        });
+        setPage(PAGES.PART3_INTRO);
+      } else {
+        setPage(PAGES.PART2_RESULT);
+      }
     } else {
+      const finalTranscript = (transcriptPart1 + (remainingText ? ` ${remainingText}` : "")).trim();
       if (remainingText && !transcriptPart1.includes(remainingText)) {
-        setTranscriptPart1((prev) => (prev + " " + remainingText).trim());
+        setTranscriptPart1(finalTranscript);
       }
-      setPage(PAGES.RESULT);
+      if (mode === "test") {
+        void persistPracticeResult({
+          transcript: finalTranscript,
+          topic: part1Topic,
+          partLabel: "Part 1",
+          partIndex: 1,
+          unitIndex: resolvedUnitIndex,
+        });
+        setPage(PAGES.PART2_INTRO);
+      } else {
+        setPage(PAGES.RESULT);
+      }
     }
     setLiveTranscript("");
     setInterimTranscript("");
@@ -308,6 +419,11 @@ export default function LexaPracticeSession() {
     setTranscriptPart3("");
     setLiveTranscript("");
     setPage(PAGES.INTRO);
+  };
+
+  const finishAllSession = () => {
+    restartSession();
+    router.push("/dashboard");
   };
 
   useEffect(() => {
@@ -354,7 +470,7 @@ export default function LexaPracticeSession() {
         <span style={styles.headerTitle}>{headerTitle}</span>
         <div style={styles.headerRight}>
           {(page === PAGES.RESULT || page === PAGES.PART2_RESULT || page === PAGES.PART3_RESULT) && (
-            <button onClick={page === PAGES.PART3_RESULT ? startPart3Session : page === PAGES.PART2_RESULT ? startPart2Session : startSession} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", padding: 4, marginRight: 8 }} title="Restart Session">
+            <button onClick={page === PAGES.PART3_RESULT && mode === "test" ? startSession : page === PAGES.PART3_RESULT ? startPart3Session : page === PAGES.PART2_RESULT ? startPart2Session : startSession} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", padding: 4, marginRight: 8 }} title="Restart Session">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
               </svg>
@@ -378,12 +494,12 @@ export default function LexaPracticeSession() {
             setTranscriptPart1((prev) => prev === joined ? prev : joined);
           }} />
         )}
-        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" />}
+        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} />}
         {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
         {page === PAGES.PART2_SESSION && (
           <SessionPagePart2 isRecording={isRecording} setIsRecording={setIsRecording} transcript={transcriptPart2} setTranscript={setTranscriptPart2} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} recError={recError} setRecError={setRecError} isListening={isListening} topic={part2Topic} bullets={part2Bullets} isLoading={isTopicsLoading} />
         )}
-        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" />}
+        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} />}
         {page === PAGES.PART3_INTRO && (
           <IntroPagePart3
             topic={part3Topic}
@@ -397,7 +513,7 @@ export default function LexaPracticeSession() {
             setTranscriptPart3((prev) => prev === joined ? prev : joined);
           }} />
         )}
-        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" />}
+        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} />}
       </main>
 
       {/* Footer Utama */}
@@ -431,7 +547,7 @@ export default function LexaPracticeSession() {
             <button style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#C95B5B", fontWeight: 600, padding: "10px 0" }} onClick={restartSession}>
               Save Progress
             </button>
-            <button style={{ ...styles.startBtn, background: "linear-gradient(135deg, #f87171, #ef4444)" }} onClick={() => alert("Selesai! Seluruh sesi latihan berhasil disimpan.") }>
+            <button style={{ ...styles.startBtn, background: "linear-gradient(135deg, #f87171, #ef4444)" }} onClick={finishAllSession}>
               Save &amp; Finish All
             </button>
           </>
@@ -1108,9 +1224,28 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   );
 }
 
-function ResultPage({ transcript, topic, partLabel }: ResultPageProps) {
+function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }: ResultPageProps) {
   const [evaluation, setEvaluation] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [finalTestSummary, setFinalTestSummary] = useState<{
+    overall: number;
+    part1: number;
+    part2: number;
+    part3: number;
+  } | null>(null);
+  const [finalTestPartDetails, setFinalTestPartDetails] = useState<Array<{
+    label: string;
+    score: number;
+    description: string;
+    evaluation: string;
+    components: Array<{ label: string; score: string; description: string }>;
+  }> | null>(null);
+  const [finalTestLoading, setFinalTestLoading] = useState(false);
+  const [finalTestError, setFinalTestError] = useState<string | null>(null);
+  const hasSavedRef = useRef(false);
+  const hasSavedFinalSummaryRef = useRef(false);
 
   const rubricItems = useMemo(() => {
     return (topic?.details || [])
@@ -1159,10 +1294,250 @@ function ResultPage({ transcript, topic, partLabel }: ResultPageProps) {
 
     void runAnalysis();
 
+    hasSavedRef.current = false;
+    setSaveStatus("idle");
+    setSaveError(null);
+
     return () => {
       cancelled = true;
     };
   }, [partLabel, rubricItems, topic?.prompt, topic?.title, transcript]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTestSummary = async () => {
+      if (mode !== "test" || partIndex !== 3 || !unitIndex || !evaluation || analysisLoading || !transcript.trim()) {
+        return;
+      }
+
+      const latestPart3Score = Number(evaluation.overall);
+      if (!Number.isFinite(latestPart3Score)) {
+        return;
+      }
+
+      setFinalTestLoading(true);
+      setFinalTestError(null);
+
+      try {
+        const { data: userData, error: userError } = await supabase.auth.getUser();
+        if (cancelled) return;
+
+        if (userError || !userData.user) {
+          setFinalTestError("Silakan login ulang agar skor akhir test bisa diproses.");
+          return;
+        }
+
+        const { data: historyRows, error: historyError } = await supabase
+          .from("student_score_history")
+          .select("score, part_index, unit_index, recorded_at, metrics")
+          .eq("student_id", userData.user.id)
+          .eq("unit_index", unitIndex)
+          .order("recorded_at", { ascending: false });
+
+        if (cancelled) return;
+
+        if (historyError) {
+          setFinalTestError(historyError.message);
+          return;
+        }
+
+        type HistoryMetric = {
+          label?: string;
+          score?: number | string;
+          text?: string;
+        };
+
+        type HistoryRow = {
+          score: number;
+          part_index: number | null;
+          metrics?: HistoryMetric[] | null;
+        };
+
+        const latestPartScores = new Map<number, number>([[3, latestPart3Score]]);
+        const partDetails: Array<{
+          label: string;
+          score: number;
+          description: string;
+          evaluation: string;
+          components: Array<{ label: string; score: string; description: string }>;
+        }> = [];
+
+        (historyRows as HistoryRow[] | null ?? []).forEach((row) => {
+          const rowPartIndex = row.part_index;
+          if ((rowPartIndex === 1 || rowPartIndex === 2) && !latestPartScores.has(rowPartIndex)) {
+            latestPartScores.set(rowPartIndex, Number(row.score));
+          }
+
+          if (rowPartIndex === 1 || rowPartIndex === 2 || rowPartIndex === 3) {
+            const partLabel = `Part ${rowPartIndex}`;
+            const partScore = Number(row.score);
+            const componentMetrics = Array.isArray(row.metrics)
+              ? row.metrics
+                  .map((metric) => ({
+                    label: metric.label ?? "Component",
+                    score: metric.score !== undefined && metric.score !== null ? String(metric.score) : "-",
+                    description: metric.text ?? "",
+                  }))
+                  .filter((metric) => metric.label !== "Component" || metric.score !== "-")
+              : [];
+
+            if (!partDetails.some((item) => item.label === partLabel)) {
+              partDetails.push({
+                label: partLabel,
+                score: Number.isFinite(partScore) ? Number(partScore.toFixed(1)) : 0,
+                description: rowPartIndex === 1
+                  ? "Short-answer warm-up section."
+                  : rowPartIndex === 2
+                    ? "Cue card / long turn section."
+                    : "Follow-up discussion section.",
+                evaluation: componentMetrics.length > 0
+                  ? `${partLabel} evaluation is based on the saved component scores below.`
+                  : `${partLabel} evaluation is based on the part score only.`,
+                components: componentMetrics,
+              });
+            }
+          }
+        });
+
+        const part1 = latestPartScores.get(1);
+        const part2 = latestPartScores.get(2);
+        const part3 = latestPartScores.get(3);
+
+        if (part1 === undefined || part2 === undefined || part3 === undefined) {
+          setFinalTestError("Skor final belum lengkap karena salah satu part belum tersimpan.");
+          return;
+        }
+
+        const overall = Number(((part1 + part2 + part3) / 3).toFixed(1));
+
+        if (!cancelled) {
+          setFinalTestSummary({ overall, part1, part2, part3 });
+          setFinalTestPartDetails(
+            partDetails.sort((a, b) => Number(a.label.replace(/[^0-9]/g, "")) - Number(b.label.replace(/[^0-9]/g, "")))
+          );
+        }
+
+        if (!hasSavedFinalSummaryRef.current) {
+          const { error: insertError } = await supabase.from("student_score_history").insert({
+            student_id: userData.user.id,
+            score: overall,
+            metrics: [
+              { id: "part1", label: "Part 1 Score", score: part1, text: "Final test summary" },
+              { id: "part2", label: "Part 2 Score", score: part2, text: "Final test summary" },
+              { id: "part3", label: "Part 3 Score", score: part3, text: "Final test summary" },
+            ],
+            speaking_attempts: 0,
+            unit_index: unitIndex,
+            part_index: null,
+            recorded_at: new Date().toISOString(),
+            recorded_by: userData.user.id,
+          });
+
+          if (insertError) {
+            setFinalTestError(insertError.message);
+            return;
+          }
+
+          hasSavedFinalSummaryRef.current = true;
+        }
+      } finally {
+        if (!cancelled) {
+          setFinalTestLoading(false);
+        }
+      }
+    };
+
+    void loadTestSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [analysisLoading, evaluation, mode, partIndex, transcript, unitIndex]);
+
+  useEffect(() => {
+    const persistResult = async () => {
+      if (analysisLoading || !evaluation || !transcript.trim() || hasSavedRef.current) {
+        return;
+      }
+
+      const latestScore = Number(evaluation.overall);
+      if (!Number.isFinite(latestScore)) {
+        setSaveStatus("error");
+        setSaveError("Skor hasil belum siap untuk disimpan.");
+        return;
+      }
+
+      hasSavedRef.current = true;
+      setSaveStatus("saving");
+      setSaveError(null);
+
+      const progressPercent = Number(Math.max(0, Math.min(100, (latestScore / 9) * 100)).toFixed(1));
+      const metricPayload = evaluation.metrics.map((metric: MetricData) => ({
+        id: metric.id,
+        label: metric.label,
+        score: Number(metric.score),
+        text: metric.text,
+      }));
+
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) {
+        setSaveStatus("error");
+        setSaveError("Silakan login ulang agar hasil bisa disimpan.");
+        hasSavedRef.current = false;
+        return;
+      }
+
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      if (sessionError || !accessToken) {
+        setSaveStatus("error");
+        setSaveError("Silakan login ulang agar hasil bisa disimpan.");
+        hasSavedRef.current = false;
+        return;
+      }
+
+      const response = await fetch("/api/student-practice-progress", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          latest_score: latestScore,
+          progress_percent: progressPercent,
+          speaking_attempts: 1,
+          last_activity_at: new Date().toISOString(),
+          last_unit_index: unitIndex,
+          last_part_index: partIndex,
+          notes: evaluation.recommendation ?? null,
+          metrics: metricPayload,
+        }),
+      });
+
+      const result = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        setSaveStatus("error");
+        setSaveError(result.error ?? "Gagal menyimpan hasil latihan.");
+        hasSavedRef.current = false;
+        return;
+      }
+
+      const refreshKey = "lexa:practice-progress-updated";
+      try {
+        localStorage.setItem(refreshKey, String(Date.now()));
+      } catch {
+        // Ignore storage failures and still notify this tab.
+      }
+      window.dispatchEvent(new Event(refreshKey));
+
+      setSaveStatus("saved");
+    };
+
+    void persistResult();
+  }, [analysisLoading, evaluation, partIndex, transcript, unitIndex]);
 
   const scoreData: EvaluationResult = evaluation ?? {
     overall: "-",
@@ -1171,6 +1546,32 @@ function ResultPage({ transcript, topic, partLabel }: ResultPageProps) {
     recommendation: "Analyzing transcript...",
     analysis: "AI analysis will appear after the transcript is processed.",
   };
+
+  const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
+  let testScoreData: EvaluationResult | null = null;
+  if (isFinalTestResult && finalTestSummary) {
+    testScoreData = {
+      overall: finalTestSummary.overall.toFixed(1),
+      level: `Final Test Band ${finalTestSummary.overall.toFixed(1)}`,
+      metrics: [
+        { id: "part1", label: "Part 1", score: finalTestSummary.part1.toFixed(1), text: "Included in the final average." },
+        { id: "part2", label: "Part 2", score: finalTestSummary.part2.toFixed(1), text: "Included in the final average." },
+        { id: "part3", label: "Part 3", score: finalTestSummary.part3.toFixed(1), text: "Included in the final average." },
+      ],
+      recommendation: "Ulangi test untuk membandingkan skor akhir terbaru.",
+      analysis: "Skor akhir test dihitung dari rata-rata Part 1, Part 2, dan Part 3.",
+    };
+  }
+  const displayScoreData = testScoreData ?? scoreData;
+  const testPartBreakdown = mode === "test" && partIndex === 3 && finalTestSummary && finalTestPartDetails
+    ? finalTestPartDetails.map((part) => ({
+        label: part.label,
+        score: part.score.toFixed(1),
+        description: part.description,
+        evaluation: part.evaluation,
+        components: part.components,
+      }))
+    : undefined;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px", width: "100%", paddingBottom: "20px" }}>
@@ -1196,28 +1597,49 @@ function ResultPage({ transcript, topic, partLabel }: ResultPageProps) {
         <div style={{ position: "absolute", top: "24px", right: "24px", color: "#C95B5B", border: "1.5px solid #C95B5B", borderRadius: "50%", width: "18px", height: "18px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "bold" }}>i</div>
         <h3 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: "0 0 16px 0" }}>AI Coach Analysis</h3>
 
+        {(saveStatus === "saving" || saveStatus === "saved" || saveStatus === "error") && (
+          <div style={{ marginBottom: "12px", fontSize: "13px", color: saveStatus === "error" ? "#b91c1c" : saveStatus === "saved" ? "#166534" : "#6b7280" }}>
+            {saveStatus === "saving"
+              ? "Saving result to dashboard history..."
+              : saveStatus === "saved"
+                ? "Result saved. Dashboard will refresh automatically."
+                : saveError}
+          </div>
+        )}
+
         {analysisLoading ? (
           <p style={{ fontSize: "14px", color: "#6b7280" }}>Analyzing transcript and admin rubric...</p>
         ) : (
           <>
             <div style={{ marginBottom: "20px" }}>
-              <AnalysisCard
-                title="Speaking Result"
-                overallScore={scoreData.overall}
-                level={scoreData.level}
-                metrics={scoreData.metrics.map((metric) => ({
-                  label: metric.label,
-                  score: metric.score,
-                  description: metric.text,
-                }))}
-                recommendation={scoreData.recommendation}
-              />
+              {finalTestLoading ? (
+                <p style={{ fontSize: "14px", color: "#6b7280" }}>Menyusun skor akhir test...</p>
+              ) : (
+                <AnalysisCard
+                  title={isFinalTestResult ? "Overall Test Result" : "Speaking Result"}
+                  overallScore={displayScoreData.overall}
+                  level={displayScoreData.level}
+                  metrics={displayScoreData.metrics.map((metric) => ({
+                    label: metric.label,
+                    score: metric.score,
+                    description: metric.text,
+                  }))}
+                  partBreakdown={testPartBreakdown}
+                  recommendation={displayScoreData.recommendation}
+                />
+              )}
             </div>
 
             <div style={{ display: "grid", gap: "12px", marginBottom: "20px" }}>
               <h4 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: 0 }}>AI Summary</h4>
-              <p style={{ fontSize: "14px", color: "#111827", margin: 0, lineHeight: 1.6 }}>{scoreData.analysis}</p>
+              <p style={{ fontSize: "14px", color: "#111827", margin: 0, lineHeight: 1.6 }}>{displayScoreData.analysis}</p>
             </div>
+
+            {finalTestError ? (
+              <div style={{ marginBottom: "20px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: "12px", padding: "12px 14px", color: "#9a3412", fontSize: "13px" }}>
+                {finalTestError}
+              </div>
+            ) : null}
 
             <div style={{ display: "grid", gap: "12px" }}>
               <h4 style={{ fontSize: "14px", fontWeight: 700, color: "#C95B5B", margin: 0 }}>Admin Rubric {partLabel}</h4>
