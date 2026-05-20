@@ -38,6 +38,9 @@ export default function UnitForm({
     "free" | "premium"
   >("premium");
 
+  const [price, setPrice] =
+    useState("");
+
   const [isActive, setIsActive] = useState(true);
 
   const [customCategories, setCustomCategories] =
@@ -177,6 +180,12 @@ export default function UnitForm({
 
         setAccessLevel(
           sessionData.access_level
+        );
+
+        setPrice(
+          sessionData.price
+            ? String(sessionData.price)
+            : ""
         );
 
         setIsActive(
@@ -442,6 +451,11 @@ export default function UnitForm({
             access_level:
               accessLevel,
 
+            price:
+              accessLevel === "premium"
+                ? Number(price)
+                : null,
+
             is_active: isActive,
 
             category,
@@ -478,6 +492,11 @@ export default function UnitForm({
 
             access_level:
               accessLevel,
+
+            price:
+              accessLevel === "premium"
+                ? Number(price)
+                : null,
 
             is_active: isActive,
 
@@ -863,6 +882,33 @@ export default function UnitForm({
             </div>
           </div>
 
+          {accessLevel === "premium" && (
+
+            <label className="block mb-6 text-sm font-semibold text-primary">
+
+              Price
+
+              <InputField
+                className="mt-2"
+                value={price}
+                onChange={(v) => {
+
+                  const numeric =
+                    v.replace(/\D/g, "");
+
+                  setPrice(numeric);
+                }}
+                placeholder="99000"
+              />
+
+              <p className="mt-2 text-xs text-gray-400">
+                Stored in IDR
+              </p>
+
+            </label>
+
+          )}
+
           {/* ACTIVE */}
           <div className="mb-8 flex items-center justify-between">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -918,9 +964,9 @@ export default function UnitForm({
               <div className="mb-6">
                 <p className="mb-2 not-last:text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
                   {part === 1
-                  ? "Introduction"
-                  : part === 2 ? "Individual Long Turn"
-                  : "Two-way Discussion"}
+                    ? "Introduction"
+                    : part === 2 ? "Individual Long Turn"
+                      : "Two-way Discussion"}
                 </p>
 
                 <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
