@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import type { ReactNode } from "react";
 import "./global.css";
 import AppHeader from "@/layout/AppHeader";
@@ -15,7 +16,9 @@ function DashboardShell({ children }: { children: ReactNode }) {
 
 	return (
 		<div className="min-h-screen xl:flex">
-			<AppSidebar />
+			<Suspense fallback={null}>
+				<AppSidebar />
+			</Suspense>
 			<Backdrop />
 			<div className={`flex-1 transition-all duration-300 ease-in-out ${contentShiftClass}`}>
 				<AppHeader />

@@ -66,6 +66,7 @@ type JourneyUnitCard = {
   title: string;
   subtitle: string;
   price?: number;
+  accessLevel?: "free" | "premium";
   topic: string;
   description: string;
   accent: string;
@@ -114,12 +115,12 @@ const isSpeakingPartIndex = (partIndex: number | null | undefined) => partIndex 
 // ==========================================
 // FORMAT SVG RADAR CHART YANG SUDAH DIPERBAIKI (GANTI BAGIAN INI)
 // ==========================================
-function SvgRadar({ 
-  values, 
+function SvgRadar({
+  values,
   size = 320
-}: { 
-  values: { fluency: number; lexical: number; grammar: number; pronunciation: number }; 
-  size?: number 
+}: {
+  values: { fluency: number; lexical: number; grammar: number; pronunciation: number };
+  size?: number
 }) {
   const half = size / 2;
   const radius = half - 48;
@@ -689,7 +690,7 @@ export default function RoleOverviewPanel({
 
   const historyBySession = useMemo(() => {
     const sessionMap = new Map<string, StudentScoreHistoryRow[]>();
-    
+
     scoredHistoryRows.forEach((row) => {
       const dateKey = new Date(row.recorded_at).toLocaleDateString();
       const sessions = sessionMap.get(dateKey) || [];
@@ -770,7 +771,7 @@ export default function RoleOverviewPanel({
       try {
         const { data: sessionUnits, error: suErr } = await supabase
           .from("session_units")
-          .select("id, seq, type, title, session_code, description")
+          .select("id, seq, type, title, session_code, description, price, access_level")
           .order("seq", { ascending: true });
 
         const { data: topics, error: tErr } = await supabase
@@ -909,6 +910,8 @@ export default function RoleOverviewPanel({
             title: unit.title ?? `Unit ${unit.seq}`,
             subtitle: modeLabel,
             price: unit.price ?? 0,
+            accessLevel:
+              unit.access_level,
             topic: topicPrompt || topicTitle,
             description: unit.description ?? (unit.mode === "test" ? "Strict practice. The order is locked and the coach is connected at test start." : "Flexible practice. Open any part first, then move in your own order."),
             accent,
@@ -1020,9 +1023,9 @@ export default function RoleOverviewPanel({
     const q = searchQuery.trim().toLowerCase();
     const base = q
       ? cards.filter((u) => {
-          const hay = `${u.title} ${u.topic} ${u.description ?? ""}`.toLowerCase();
-          return hay.includes(q);
-        })
+        const hay = `${u.title} ${u.topic} ${u.description ?? ""}`.toLowerCase();
+        return hay.includes(q);
+      })
       : [...cards];
 
     base.sort((a, b) => {
@@ -1091,6 +1094,7 @@ export default function RoleOverviewPanel({
                   title={unit.title}
                   topic={unit.topic}
                   price={unit.price}
+                  accessLevel={unit.accessLevel}
                   progress={getUnitProgress(unitIndex)}
                   status="Active"
                   accent={unit.accent}
@@ -1148,6 +1152,7 @@ export default function RoleOverviewPanel({
                   title={unit.title}
                   topic={unit.topic}
                   price={unit.price}
+                  accessLevel={unit.accessLevel}
                   progress={getUnitProgress(unitIndex)}
                   status="Active"
                   accent={unit.accent}
@@ -1155,7 +1160,7 @@ export default function RoleOverviewPanel({
                   coreFocus={unit.unitIndex === 2}
                   score={latestFinalScoreByUnit.get(unitIndex) ?? null}
                   scoreLabel="Final"
-                  onStart={() => router.push(`/learn?mode=test&unit=${unitIndex}&part=1&autostart=1`) }
+                  onStart={() => router.push(`/learn?mode=test&unit=${unitIndex}&part=1&autostart=1`)}
                 />
               );
             })
@@ -1165,7 +1170,7 @@ export default function RoleOverviewPanel({
     );
   }
 
- // Full dashboard view
+  // Full dashboard view
   return (
     <section className="space-y-6">
       <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
@@ -1223,7 +1228,7 @@ export default function RoleOverviewPanel({
                     <p className="text-sm font-bold text-brand-600 dark:text-brand-400">{session.avgScore.toFixed(1)}</p>
                     <p className="text-[10px] text-gray-400 uppercase">avg score</p>
                   </div>
-                  <button 
+                  <button
                     type="button"
                     onClick={() => {
                       const targetUnit = session.entries?.[0]?.unit_index ?? 1;
@@ -1252,7 +1257,7 @@ export default function RoleOverviewPanel({
             <h3 className="text-sm font-semibold text-#C95B5B dark:text-red-300">AI Feedback Section</h3>
             <p className="text-xs text-red-600 dark:text-red-400">Generated from your latest band and trend.</p>
           </div>
-          <button 
+          <button
             type="button"
             onClick={() => {
               const printWindow = window.open('', '_blank');
@@ -1354,7 +1359,7 @@ export default function RoleOverviewPanel({
           </div>
         </div>
       </div>
-{/* ==================== 🔴 SEKSI MODAL DETAIL EVALUASI (COMBINATION: CARDS + TABS FILTER LOGS) ==================== */}
+      {/* ==================== 🔴 SEKSI MODAL DETAIL EVALUASI (COMBINATION: CARDS + TABS FILTER LOGS) ==================== */}
       {historyDetailModal.open && (() => {
         // 1. Ambil semua baris data dari database untuk unit yang dipilih
         const targetedRows = historyRows.filter(
@@ -1386,7 +1391,7 @@ export default function RoleOverviewPanel({
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in">
             <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-gray-800">
-              
+
               {/* Header Modal */}
               <div className="flex items-start justify-between border-b border-gray-100 pb-4 dark:border-gray-800">
                 <div>
@@ -1408,11 +1413,10 @@ export default function RoleOverviewPanel({
                 <button
                   type="button"
                   onClick={() => setActiveTab(1)}
-                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${
-                    activeTab === 1 
-                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10" 
+                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 1
+                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
                       : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
-                  }`}
+                    }`}
                 >
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 1</p>
                   <div className="my-2">
@@ -1430,11 +1434,10 @@ export default function RoleOverviewPanel({
                 <button
                   type="button"
                   onClick={() => setActiveTab(2)}
-                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${
-                    activeTab === 2 
-                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10" 
+                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 2
+                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
                       : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
-                  }`}
+                    }`}
                 >
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 2</p>
                   <div className="my-2">
@@ -1452,11 +1455,10 @@ export default function RoleOverviewPanel({
                 <button
                   type="button"
                   onClick={() => setActiveTab(3)}
-                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${
-                    activeTab === 3 
-                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10" 
+                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 3
+                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
                       : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
-                  }`}
+                    }`}
                 >
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 3</p>
                   <div className="my-2">
