@@ -14,6 +14,7 @@ type UnitCardProps = {
   coreFocus?: boolean;
   score?: number | string | null;
   scoreLabel?: string;
+  accessLevel?: "free" | "premium";
 };
 
 export default function UnitCard({
@@ -23,6 +24,7 @@ export default function UnitCard({
   progress = 0,
   status = "Active",
   price,
+  accessLevel,
   onStart,
   accent,
   partsCount,
@@ -31,16 +33,53 @@ export default function UnitCard({
   scoreLabel = "Final score",
 }: UnitCardProps) {
   const hasScore = score !== null && score !== undefined && score !== "";
+  const isLocked =
+    accessLevel === "premium";
 
   return (
     <div
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === "Enter" && onStart) onStart();
+        if (
+          e.key === "Enter" &&
+          onStart &&
+          !isLocked
+        ) onStart();
       }}
-      onClick={() => onStart?.()}
-      className="group relative cursor-pointer overflow-hidden rounded-[24px] border border-gray-200 bg-gradient-to-br from-white via-white to-rose-50/50 p-5 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-[0_18px_40px_rgba(15,23,42,0.16)] focus:outline-none focus:ring-2 focus:ring-primary/20"
+      onClick={() => {
+
+        if (isLocked) return;
+
+        onStart?.();
+      }}
+      className={`
+  group relative overflow-hidden
+  rounded-[24px] border p-5
+  transition-all duration-300
+  focus:outline-none focus:ring-2
+  focus:ring-primary/20
+
+  ${isLocked
+          ? `
+        cursor-not-allowed
+        border-gray-200
+        bg-gray-100/80
+        opacity-70
+        grayscale-[0.2]
+      `
+          : `
+        cursor-pointer
+        border-gray-200
+        bg-gradient-to-br
+        from-white via-white to-rose-50/50
+        shadow-[0_12px_30px_rgba(15,23,42,0.08)]
+        hover:-translate-y-1
+        hover:border-primary/40
+        hover:shadow-[0_18px_40px_rgba(15,23,42,0.16)]
+      `
+        }
+`}
     >
       <div className="pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full bg-primary/10 blur-2xl" />
 
@@ -54,6 +93,19 @@ export default function UnitCard({
           ) : null}
           <h3 className="mb-1 text-2xl font-bold text-gray-900 leading-tight">{title}</h3>
           <p className="text-sm text-gray-600">{topic}</p>
+          {isLocked && (
+            <div className="mt-3">
+              <span className="
+      rounded-full
+      bg-yellow-100
+      px-3 py-1
+      text-xs font-semibold
+      text-yellow-700
+    ">
+                Premium Content
+              </span>
+            </div>
+          )}
           {price !== undefined && (
             <div className="mt-3">
               <span className="rounded-full bg-rose-50 px-3 py-1 text-sm font-medium text-rose-700">
@@ -91,7 +143,17 @@ export default function UnitCard({
       {/* Progress bar */}
       <div className="mt-4">
         <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
-          <div className={`h-full rounded-full ${accent ? `bg-gradient-to-r ${accent}` : 'bg-gradient-to-r from-primary to-rose-400'}`} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+          <div
+            className={`
+    h-full rounded-full
+
+    ${isLocked
+                ? "bg-gray-400"
+                : accent
+                  ? `bg-gradient-to-r ${accent}`
+                  : "bg-gradient-to-r from-primary to-rose-400"
+              }
+  `} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
         </div>
         <div className="mt-2 text-xs text-gray-500">
           {Math.round(progress)}% complete
@@ -101,10 +163,28 @@ export default function UnitCard({
       {/* Start Now button */}
       <div className="mt-5 flex justify-end">
         <button
-          onClick={(e) => { e.stopPropagation(); onStart?.(); }}
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90"
+          onClick={(e) => {
+
+            e.stopPropagation();
+
+            if (isLocked) return;
+
+            onStart?.();
+          }}
+          className={`
+  rounded-lg px-4 py-2 text-sm
+  font-medium text-white
+  transition-colors
+
+  ${isLocked
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-primary hover:bg-primary/90"
+            }
+`}
         >
-          Start Now
+          {isLocked
+            ? "Premium"
+            : "Start Now"}
         </button>
       </div>
     </div>
