@@ -14,10 +14,10 @@ export default function CoachClassPage() {
   const [status, setStatus] = useState<string | null>(null);
 
   const metrics = [
-    { id: `lex-${Date.now()}`, label: "Lexical", score: String(lexical), text: "" },
-    { id: `gram-${Date.now()}`, label: "Grammar", score: String(grammar), text: "" },
-    { id: `pron-${Date.now()}`, label: "Pronunciation", score: String(pronunciation), text: "" },
-    { id: `flu-${Date.now()}`, label: "Fluency", score: String(fluency), text: "" },
+    { id: `lex-${Date.now()}`, label: "Lexical", score: String(lexical), text: "", description: "" },
+    { id: `gram-${Date.now()}`, label: "Grammar", score: String(grammar), text: "", description: "" },
+    { id: `pron-${Date.now()}`, label: "Pronunciation", score: String(pronunciation), text: "", description: "" },
+    { id: `flu-${Date.now()}`, label: "Fluency", score: String(fluency), text: "", description: "" },
   ];
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
 import { supabase } from "@/lib/supabase";
 import {
+  getAssignmentTopics,
   getBulletsFromTopic,
   getQuestionsFromTopic,
   getTopicsByUnit,
@@ -249,6 +250,8 @@ export default function LexaPracticeSession() {
   const [liveTranscript, setLiveTranscript] = useState("");
   const [sessionTopics, setSessionTopics] = useState<Topic[]>([]);
   const [isTopicsLoading, setIsTopicsLoading] = useState(false);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const assignmentAutoStartedRef = useRef(false);
 
   // PART 3 state (mirip Part 1)
   const [transcriptPart3, setTranscriptPart3] = useState("");
@@ -259,7 +262,12 @@ export default function LexaPracticeSession() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [assignmentActionStatus, setAssignmentActionStatus] = useState<"idle" | "saving" | "saved" | "error" | "submitted">("idle");
+  const [assignmentActionError, setAssignmentActionError] = useState<string | null>(null);
 
+  const assignmentId = searchParams.get("assignmentId");
+  const assignmentPartParam = Number.parseInt(searchParams.get("part") ?? "", 10);
+  const shouldAutoStart = searchParams.get("autostart") === "1";
   const unitId = searchParams.get("unit");
   const mode = searchParams.get("mode") as "learn" | "test" | null;
   const unitIndex = Number.parseInt(unitId ?? "", 10);
@@ -269,13 +277,29 @@ export default function LexaPracticeSession() {
     let cancelled = false;
 
     const loadTopics = async () => {
-      if (!unitId) {
-        setSessionTopics([]);
-        setIsTopicsLoading(false);
+      setAssignmentError(null);
+      setIsTopicsLoading(true);
+
+      if (assignmentId) {
+        const topics = await getAssignmentTopics(assignmentId);
+        if (!cancelled) {
+          setSessionTopics(topics);
+          setIsTopicsLoading(false);
+          if (!topics.length) {
+            setAssignmentError("Assignment not found or assignment content is unavailable.");
+          }
+        }
         return;
       }
 
-      setIsTopicsLoading(true);
+      if (!unitId) {
+        if (!cancelled) {
+          setSessionTopics([]);
+          setIsTopicsLoading(false);
+        }
+        return;
+      }
+
       const topics = await getTopicsByUnit(unitId, mode);
 
       if (!cancelled) {
@@ -289,11 +313,70 @@ export default function LexaPracticeSession() {
     return () => {
       cancelled = true;
     };
-  }, [unitId, mode]);
+  }, [assignmentId, unitId, mode]);
+
+  useEffect(() => {
+    if (!assignmentId) return;
+    let cancelled = false;
+
+    const checkAssignmentSubmission = async () => {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user || cancelled) return;
+
+      const { data, error } = await supabase
+        .from("assignment_submissions")
+        .select("status")
+        .eq("assignment_id", assignmentId)
+        .eq("student_id", user.id)
+        .maybeSingle();
+
+      if (!cancelled && !error && (data?.status === "submitted" || data?.status === "complete")) {
+        setAssignmentActionStatus("submitted");
+      }
+    };
+
+    void checkAssignmentSubmission();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assignmentId]);
+
+  useEffect(() => {
+    if (!assignmentId || !sessionTopics.length) return;
+    if (assignmentAutoStartedRef.current) return;
+    if (assignmentActionStatus === "submitted") return;
+
+    const part = sessionTopics[0]?.part ?? assignmentPartParam;
+    if (shouldAutoStart) {
+      assignmentAutoStartedRef.current = true;
+      if (part === 2) {
+        startPart2Session();
+      } else if (part === 3) {
+        startPart3Session();
+      } else {
+        startSession();
+      }
+      return;
+    }
+
+    if (part === 2 && page === PAGES.INTRO) {
+      setPage(PAGES.PART2_INTRO);
+    } else if (part === 3 && page === PAGES.INTRO) {
+      setPage(PAGES.PART3_INTRO);
+    }
+  }, [assignmentId, assignmentPartParam, page, sessionTopics, shouldAutoStart]);
 
   const part1Topic = sessionTopics.find((topic) => topic.part === 1) ?? null;
   const part2Topic = sessionTopics.find((topic) => topic.part === 2) ?? null;
   const part3Topic = sessionTopics.find((topic) => topic.part === 3) ?? null;
+
+  const isAssignment = Boolean(assignmentId);
+  const currentAssignmentPart = page === PAGES.PART2_INTRO || page === PAGES.PART2_SESSION || page === PAGES.PART2_RESULT
+    ? 2
+    : page === PAGES.PART3_INTRO || page === PAGES.PART3_SESSION || page === PAGES.PART3_RESULT
+      ? 3
+      : 1;
 
   const part1Questions = part1Topic ? getQuestionsFromTopic(part1Topic) : [];
   const part2BulletsRaw = part2Topic ? getBulletsFromTopic(part2Topic) : [];
@@ -323,6 +406,7 @@ export default function LexaPracticeSession() {
       ];
 
   const startSession = () => {
+    if (isAssignmentLocked) return;
     setTime(5 * 60);
     setIsListening(true);
     setIsRecording(false);
@@ -334,6 +418,7 @@ export default function LexaPracticeSession() {
   };
 
   const startPart2Session = () => {
+    if (isAssignmentLocked) return;
     setTime(2 * 60);
     setIsListening(true);
     setIsRecording(false);
@@ -345,6 +430,7 @@ export default function LexaPracticeSession() {
   };
 
   const startPart3Session = () => {
+    if (isAssignmentLocked) return;
     // Part 3 UI should mirror Part 1 (longer turn)
     setTime(5 * 60);
     setIsListening(true);
@@ -444,14 +530,93 @@ export default function LexaPracticeSession() {
   };
 
   const timerGreen = page === PAGES.SESSION || page === PAGES.PART2_SESSION || page === PAGES.PART3_SESSION;
-  const headerTitle = page.startsWith("part2")
-    ? `Practice Unit 1 – Part 2${part2Topic?.title ? ` (${part2Topic.title})` : " (Cue Card)"}`
-    : page.startsWith("part3")
-      ? `Practice Unit 1 – Part 3${part3Topic?.title ? ` (${part3Topic.title})` : " (Introduction)"}`
-      : `Practice Unit 1 – Part 1${part1Topic?.title ? ` (${part1Topic.title})` : " (Introduction)"}`;
+  const headerModeLabel = isAssignment ? "Assignment" : "Learn";
+  const headerTitle = isAssignment
+    ? `Assignment – Part ${currentAssignmentPart}${currentAssignmentPart === 1 ? part1Topic?.title ? ` (${part1Topic.title})` : "" : currentAssignmentPart === 2 ? part2Topic?.title ? ` (${part2Topic.title})` : "" : part3Topic?.title ? ` (${part3Topic.title})` : ""}`
+    : page.startsWith("part2")
+      ? `Practice Unit 1 – Part 2${part2Topic?.title ? ` (${part2Topic.title})` : " (Cue Card)"}`
+      : page.startsWith("part3")
+        ? `Practice Unit 1 – Part 3${part3Topic?.title ? ` (${part3Topic.title})` : " (Introduction)"}`
+        : `Practice Unit 1 – Part 1${part1Topic?.title ? ` (${part1Topic.title})` : " (Introduction)"}`;
 
   const currentTranscript = page.startsWith("part2") ? transcriptPart2 : page.startsWith("part3") ? transcriptPart3 : transcriptPart1;
   const hasSpoken = Boolean(currentTranscript.trim() || liveTranscript.trim() || interimTranscript.trim());
+
+  const isAssignmentResultPage = isAssignment && [PAGES.RESULT, PAGES.PART2_RESULT, PAGES.PART3_RESULT].includes(page);
+  const isAssignmentLocked = isAssignment && assignmentActionStatus === "submitted";
+
+  const getCurrentAssignmentTopic = () => {
+    if (currentAssignmentPart === 2) return part2Topic;
+    if (currentAssignmentPart === 3) return part3Topic;
+    return part1Topic;
+  };
+
+  const saveAssignmentProgress = async () => {
+    setAssignmentActionStatus("saving");
+    setAssignmentActionError(null);
+    try {
+      const topic = getCurrentAssignmentTopic();
+      const transcript = currentAssignmentPart === 2 ? transcriptPart2 : currentAssignmentPart === 3 ? transcriptPart3 : transcriptPart1;
+      await persistPracticeResult({
+        transcript,
+        topic,
+        partLabel: `Part ${currentAssignmentPart}`,
+        partIndex: currentAssignmentPart,
+        unitIndex: resolvedUnitIndex,
+      });
+      setAssignmentActionStatus("saved");
+    } catch (error) {
+      console.error(error);
+      setAssignmentActionStatus("error");
+      setAssignmentActionError("Gagal menyimpan progress assignment. Coba lagi.");
+      throw error;
+    }
+  };
+
+  const submitAssignment = async () => {
+    setAssignmentActionStatus("saving");
+    setAssignmentActionError(null);
+    try {
+      await saveAssignmentProgress();
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        throw new Error("Silakan login ulang untuk submit assignment.");
+      }
+      const now = new Date().toISOString();
+      const { error: submissionError } = await supabase
+        .from("assignment_submissions")
+        .upsert(
+          {
+            assignment_id: assignmentId,
+            student_id: user.id,
+            status: "submitted",
+            submitted_at: now,
+            updated_at: now,
+          },
+          { onConflict: ["assignment_id", "student_id"] }
+        );
+      if (submissionError) {
+        throw submissionError;
+      }
+      setAssignmentActionStatus("submitted");
+
+      const { data: assignmentRecord, error: assignmentError } = await supabase
+        .from("assignments")
+        .select("class_id")
+        .eq("id", assignmentId)
+        .maybeSingle();
+
+      if (!assignmentError && assignmentRecord?.class_id) {
+        router.push(`/dashboard/user/class/${assignmentRecord.class_id}`);
+      } else {
+        router.push("/dashboard/user/class");
+      }
+    } catch (error: any) {
+      console.error(error);
+      setAssignmentActionStatus("error");
+      setAssignmentActionError(error?.message ?? "Gagal submit assignment.");
+    }
+  };
 
   return (
     <div style={styles.root}>
@@ -467,9 +632,12 @@ export default function LexaPracticeSession() {
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
+        {isAssignment ? (
+          <span style={styles.headerMode}>{headerModeLabel}</span>
+        ) : null}
         <span style={styles.headerTitle}>{headerTitle}</span>
         <div style={styles.headerRight}>
-          {(page === PAGES.RESULT || page === PAGES.PART2_RESULT || page === PAGES.PART3_RESULT) && (
+          {(page === PAGES.RESULT || page === PAGES.PART2_RESULT || page === PAGES.PART3_RESULT) && !isAssignmentLocked && (
             <button onClick={page === PAGES.PART3_RESULT && mode === "test" ? startSession : page === PAGES.PART3_RESULT ? startPart3Session : page === PAGES.PART2_RESULT ? startPart2Session : startSession} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", padding: 4, marginRight: 8 }} title="Restart Session">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
@@ -484,6 +652,14 @@ export default function LexaPracticeSession() {
           </div>
         </div>
       </header>
+
+      {assignmentError ? (
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
+          <div style={{ ...styles.warningCard, maxWidth: 760 }}>
+            <strong>Assignment issue:</strong> {assignmentError}
+          </div>
+        </div>
+      ) : null}
 
       {/* Body */}
       <main style={styles.main}>
@@ -518,7 +694,26 @@ export default function LexaPracticeSession() {
 
       {/* Footer Utama */}
       <footer style={styles.footer}>
-        {page === PAGES.RESULT ? (
+        {isAssignmentResultPage ? (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+              {assignmentActionStatus === 'submitted' ? (
+                <span style={{ color: '#166534', fontSize: 13, fontWeight: 600 }}>Assignment submitted successfully.</span>
+              ) : assignmentActionStatus === 'error' ? (
+                <span style={{ color: '#b91c1c', fontSize: 13, fontWeight: 600 }}>{assignmentActionError}</span>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button
+                style={{ ...styles.startBtn, background: assignmentActionStatus === 'submitted' ? '#10b981' : 'linear-gradient(135deg, #f87171, #ef4444)' }}
+                onClick={submitAssignment}
+                disabled={assignmentActionStatus === 'saving' || assignmentActionStatus === 'submitted'}
+              >
+                {assignmentActionStatus === 'submitted' ? 'Submitted' : 'Submit Assignment'}
+              </button>
+            </div>
+          </>
+        ) : page === PAGES.RESULT ? (
           <>
             <button style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#C95B5B", fontWeight: 600, padding: "10px 0" }} onClick={restartSession}>
               Save Progress
@@ -554,7 +749,14 @@ export default function LexaPracticeSession() {
         ) : (
           <>
             <button style={styles.cancelBtn} onClick={() => setPage(PAGES.INTRO)}> Cancel </button>
-            {page === PAGES.INTRO ? (
+            {assignmentActionStatus === 'submitted' ? (
+              <button
+                style={{ ...styles.disabledStartBtn }}
+                disabled
+              >
+                Start Session
+              </button>
+            ) : page === PAGES.INTRO ? (
               <button style={styles.startBtn} onClick={startSession}>Start Session</button>
             ) : page === PAGES.PART2_INTRO ? (
               <button style={styles.startBtn} onClick={startPart2Session}>Start Session</button>
@@ -589,6 +791,9 @@ function IntroPage({ topic }: { topic: Topic | null }) {
       <div style={styles.contentAlign}>
         <p style={styles.instructionLabel}>Topic Overview</p>
         <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span><strong>{topicTitle}</strong></span></div>
+        {topic?.description ? (
+          <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>{topic.description}</span></div>
+        ) : null}
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>{topicPrompt}</span></div>
         <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Keep your answers reasonable while treating it like a casual conversation.</span></div>
         <DetailBubbleList label="Bullet bubbles" items={bullets} accent="#166534" />
@@ -613,6 +818,9 @@ function IntroPagePart2({ topic }: { topic: Topic | null; bullets?: string[] }) 
       <div style={styles.contentAlign}>
         <p style={styles.instructionLabel}>Please carefully read the instructions below before proceed the practice session</p>
         <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>Topic: <strong>{topicTitle}</strong></span></div>
+        {topic?.description ? (
+          <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>{topic.description}</span></div>
+        ) : null}
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>The cue card will opens and you get 1 minute to think about what you’re going to say. You can make some notes to help you if you wish.</span></div>
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>The cue card will closes and you will got the chance to speak for up to 2 minutes.</span></div>
         <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Focus on covering all bullet points clearly and finish with a short summary.</span></div>
@@ -645,6 +853,9 @@ function IntroPagePart3({
       </div>
       <div style={styles.contentAlign}>
         <p style={styles.instructionLabel}>Please carefully read the instructions below before proceed the practice session</p>
+        {topic?.description ? (
+          <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>{topic.description}</span></div>
+        ) : null}
         <div style={styles.infoCard}><span style={styles.infoIcon}>i</span> <span>{topicPrompt}</span></div>
         <div style={styles.warningCard}><span style={styles.infoIcon}>i</span> <span>You will have to speak for the total of <strong>4–5 minutes</strong> for this part.</span></div>
         <div style={styles.tipCard}><span style={styles.infoIcon}>i</span> <span>Tips: Be natural and keep answers concise but informative.</span></div>
@@ -1678,12 +1889,15 @@ const styles: Record<string, CSSProperties> = {
   header: { display: "flex", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid #f3f4f6", gap: 12 },
   backBtn: { background: "none", border: "none", cursor: "pointer", color: "#374151", display: "flex", alignItems: "center", padding: 4 },
   headerTitle: { flex: 1, fontSize: 18, fontWeight: 600, color: "#111827" },
+  headerMode: { marginLeft: 12, fontSize: 12, fontWeight: 700, color: "#fff", background: "#ef4444", padding: "4px 10px", borderRadius: 9999, textTransform: "uppercase", letterSpacing: "0.08em" },
   headerRight: { display: "flex", alignItems: "center", gap: 10 },
   timerBadge: { display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 20 },
   main: { flex: 1, padding: "24px 28px", overflowY: "auto", position: "relative" },
   footer: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 28px", borderTop: "1px solid #f3f4f6" },
   cancelBtn: { background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#6b7280", fontWeight: 500 },
   startBtn: { background: "linear-gradient(135deg, #f87171, #ef4444)", color: "#fff", border: "none", borderRadius: 24, padding: "10px 28px", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 14px rgba(239,68,68,0.35)" },
+  disabledStartBtn: { background: "#f3f4f6", color: "#111827", border: "none", borderRadius: 24, padding: "10px 28px", fontSize: 13, fontWeight: 600, cursor: "not-allowed", opacity: 0.9 },
+  secondaryBtn: { background: "transparent", border: "1px solid #f87171", borderRadius: 24, padding: "10px 24px", fontSize: 13, fontWeight: 600, cursor: "pointer" },
   chat: { display: "flex", flexDirection: "column", gap: 12, width: "100%" },
   lexaBubbleWrap: { display: "flex", alignItems: "flex-start", gap: 10 },
   lexaAvatar: { width: 40, height: 40, borderRadius: "100%", background: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, border: "1.5px solid #f5f5f5" },

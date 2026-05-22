@@ -22,6 +22,7 @@ interface Student {
 
 interface JoinRequest {
   id: string;
+  student_id: string;
   email: string;
   requested_at: string;
 }
@@ -248,9 +249,10 @@ export default function ClassPage() {
 
       const { data: requestData, error: requestError } = await supabase
         .from("class_join_requests")
-        .select("id, requested_at, profiles!inner(id, email)")
+        .select("id, student_id, requested_at, profiles!inner(id, email)")
         .eq("class_id", classItem.id)
-        .eq("status", "pending");
+        .eq("status", "pending")
+        .order("requested_at", { ascending: false });
 
       if (requestError) {
         throw requestError;
@@ -260,6 +262,7 @@ export default function ClassPage() {
       setJoinRequests(
         (requestData as any[] | null)?.map((d) => ({
           id: d.id,
+          student_id: d.student_id,
           email: d.profiles.email,
           requested_at: d.requested_at,
         })) || []
@@ -469,23 +472,13 @@ export default function ClassPage() {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleViewApprovals(cls);
-                        }}
-                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white/90 text-primary/70 shadow-sm transition-colors hover:bg-primary/5 hover:text-primary"
-                        title="Approval requests"
-                      >
-                        <CheckIcon weight="regular" size={20} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
                           handleViewStudents(cls);
                         }}
-                        className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white/90 text-primary/70 shadow-sm transition-colors hover:bg-primary/5 hover:text-primary"
+                        className="inline-flex h-11 min-w-[150px] items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white/90 px-4 text-sm font-semibold text-primary/80 shadow-sm transition-colors hover:bg-primary/5 hover:text-primary"
                         title="Manage students"
                       >
                         <UsersIcon weight="regular" size={20} />
+                        Manage Students
                       </button>
                     </div>
                   </div>
@@ -651,17 +644,31 @@ export default function ClassPage() {
 
         {/* Students Modal */}
         {showModal && selectedClass && isMounted && createPortal(
-          <div className="fixed inset-0 bg-black/55 backdrop-blur-md flex items-center justify-center z-[9999] p-4">
-            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full max-h-[80vh] overflow-y-auto border border-gray-200">
-              <div className="sticky top-0 bg-white rounded-t-3xl border-b border-gray-200 p-6">
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55 backdrop-blur-md px-4 py-6">
+            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200 flex flex-col">
+              <div className="sticky top-0 z-10 bg-white border-b border-gray-200 p-6">
                 <h2 className="text-2xl font-bold text-gray-900">
-                  {modalMode === "approval"
-                    ? `Approval Requests for ${selectedClass.name}`
-                    : `Students in ${selectedClass.name}`}
+                  {selectedClass ? `Manage ${selectedClass.name}` : "Manage students"}
                 </h2>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalMode("students")}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${modalMode === "students" ? "bg-primary text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}
+                  >
+                    Student List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectedClass && handleViewApprovals(selectedClass)}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${modalMode === "approval" ? "bg-primary text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}
+                  >
+                    Approval
+                  </button>
+                </div>
               </div>
 
-              <div className="p-6 space-y-6">
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {notice ? (
                   <div className="rounded-2xl border border-green-100 bg-green-50 p-4 text-sm text-green-800">
                     {notice}
@@ -720,43 +727,41 @@ export default function ClassPage() {
                       </div>
                     )}
                   </div>
+                ) : students.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8 text-center">
+                    <div className="text-4xl mb-3">👥</div>
+                    <p className="text-gray-600">No students joined yet</p>
+                  </div>
                 ) : (
-                  students.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-8 text-center">
-                      <div className="text-4xl mb-3">👥</div>
-                      <p className="text-gray-600">No students joined yet</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {students.map((student) => (
-                        <div
-                          key={student.id}
-                          className="flex items-center gap-3 p-3 bg-tertiary rounded-lg hover:bg-tertiary/80 transition-colors"
-                        >
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-r from-secondary to-primary flex items-center justify-center text-white font-bold">
-                            {student.email.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-800 truncate">
-                              {student.email}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveStudent(student.id, student.email)}
-                            disabled={actionLoading}
-                            className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
-                          >
-                            <TrashIcon size={18} weight="regular" />
-                          </button>
+                  <div className="space-y-2">
+                    {students.map((student) => (
+                      <div
+                        key={student.id}
+                        className="flex items-center gap-3 p-3 bg-tertiary rounded-lg hover:bg-tertiary/80 transition-colors"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-r from-secondary to-primary flex items-center justify-center text-white font-bold">
+                          {student.email.charAt(0).toUpperCase()}
                         </div>
-                      ))}
-                    </div>
-                  )
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">
+                            {student.email}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveStudent(student.id, student.email)}
+                          disabled={actionLoading}
+                          className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                        >
+                          <TrashIcon size={18} weight="regular" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
-              <div className="sticky bottom-0 bg-white rounded-b-3xl border-t border-gray-100 p-6">
+              <div className="sticky bottom-0 bg-white border-t border-gray-100 p-6">
                 <TextButton
                   variant="secondary"
                   onClick={() => {

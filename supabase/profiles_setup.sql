@@ -880,6 +880,16 @@ create table if not exists public.topic_details (
 create index if not exists idx_topics_part on public.topics(part);
 create index if not exists idx_topic_details_topic_id on public.topic_details(topic_id);
 
+-- [TAMBAHAN BARU] Membuat tabel session_units agar RLS tidak error
+create table if not exists public.session_units (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  description text,
+  order_index int default 0,
+  is_active boolean default true,
+  created_at timestamptz not null default now()
+);
+
 alter table public.session_units enable row level security;
 
 drop policy if exists "Allow read session_units" on public.session_units;
@@ -962,7 +972,9 @@ create table if not exists public.assignments (
   part int not null default 1,
   title text not null,
   description text,
+  start_at timestamptz,
   due_at timestamptz,
+  -- assignment-level metrics removed; use per-question rubric instead
   is_active boolean default true,
   created_at timestamptz not null default now()
 );
@@ -973,12 +985,16 @@ alter table public.assignments
 alter table public.assignments
   add column if not exists start_at timestamptz;
 
+
+
 create table if not exists public.assignment_questions (
   id uuid primary key default gen_random_uuid(),
   assignment_id uuid not null references public.assignments(id) on delete cascade,
   content text not null,
+  prompt text default '',
   type text not null default 'question' check (type in ('question', 'bullet')),
   order_index int default 0,
+  rubric text default '',
   created_at timestamptz not null default now()
 );
 
@@ -994,7 +1010,11 @@ create table if not exists public.assignment_submissions (
 
 -- Alter statements for assignment_questions table
 alter table public.assignment_questions
+  add column if not exists prompt text default '';
+alter table public.assignment_questions
   add column if not exists type text not null default 'question' check (type in ('question', 'bullet'));
+alter table public.assignment_questions
+  add column if not exists rubric text;
 
 -- Indexes for assignments
 create index if not exists assignments_class_id_idx on public.assignments(class_id);

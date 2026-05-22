@@ -21,6 +21,11 @@ type StudentProgressRow = {
   notes: string | null;
 };
 
+type ClassRow = {
+  id: string;
+  name: string;
+};
+
 type StudentInsight = StudentRow & {
   name: string;
   latest_score: number | null;
@@ -29,6 +34,8 @@ type StudentInsight = StudentRow & {
   last_activity_at: string | null;
   updated_at: string | null;
   notes: string | null;
+  classes: string[];
+  class_ids: string[];
 };
 
 const getStudentNameFromEmail = (email: string) => {
@@ -58,6 +65,8 @@ export default function CoachStudentsInsightTable() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [students, setStudents] = useState<StudentInsight[]>([]);
+  const [classes, setClasses] = useState<ClassRow[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [pageSize, setPageSize] = useState<5 | 10>(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -97,11 +106,49 @@ export default function CoachStudentsInsightTable() {
         return;
       }
 
+      const { data: classesData, error: classesError } = await supabase
+        .from("classes")
+        .select("id, name")
+        .eq("coach_id", user.id)
+        .order("name", { ascending: true });
+
+      if (classesError) {
+        setNotice(`Failed to load classes: ${classesError.message}.`);
+      }
+
+      const classRows = (classesData as ClassRow[] | null) ?? [];
+      setClasses(classRows);
+      const classIds = classRows.map((cls) => cls.id);
+
+      if (classIds.length === 0) {
+        setStudents([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: classMembersData, error: classMembersError } = await supabase
+        .from("class_members")
+        .select("class_id, student_id")
+        .in("class_id", classIds);
+
+      if (classMembersError) {
+        setNotice(`Failed to load class members: ${classMembersError.message}.`);
+      }
+
+      const classMembers = (classMembersData as { class_id: string; student_id: string }[] | null) ?? [];
+      const studentIds = Array.from(new Set(classMembers.map((member) => member.student_id)));
+
+      if (studentIds.length === 0) {
+        setStudents([]);
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("profiles")
         .select("id, email, role, created_at")
+        .in("id", studentIds)
         .eq("role", "user")
-        .eq("coach_id", user.id)
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -114,8 +161,6 @@ export default function CoachStudentsInsightTable() {
         setLoading(false);
         return;
       }
-
-      const studentIds = studentRows.map((row) => row.id);
 
       const { data: progressRows, error: progressError } = await supabase
         .from("student_progress")
@@ -131,9 +176,19 @@ export default function CoachStudentsInsightTable() {
       const progressMap = new Map(
         ((progressRows as StudentProgressRow[] | null) ?? []).map((row) => [row.student_id, row])
       );
+      const classNameMap = new Map(classRows.map((cls) => [cls.id, cls.name]));
+      const membershipMap = new Map<string, string[]>();
+
+      classMembers.forEach((member) => {
+        const className = classNameMap.get(member.class_id);
+        if (!className) return;
+        const existing = membershipMap.get(member.student_id) ?? [];
+        membershipMap.set(member.student_id, Array.from(new Set([...existing, className])));
+      });
 
       const mergedRows: StudentInsight[] = studentRows.map((row) => {
         const progress = progressMap.get(row.id);
+        const classesForStudent = membershipMap.get(row.id) ?? [];
         return {
           ...row,
           name: getStudentNameFromEmail(row.email),
@@ -143,6 +198,10 @@ export default function CoachStudentsInsightTable() {
           last_activity_at: progress?.last_activity_at ?? null,
           updated_at: progress?.updated_at ?? null,
           notes: progress?.notes ?? null,
+          classes: classesForStudent,
+          class_ids: classMembers
+            .filter((member) => member.student_id === row.id)
+            .map((member) => member.class_id),
         };
       });
 
@@ -156,14 +215,22 @@ export default function CoachStudentsInsightTable() {
   const filteredRows = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return students.filter((row) => {
+      if (selectedClassId && !row.class_ids.includes(selectedClassId)) {
+        return false;
+      }
+
       if (!query) return true;
-      return row.email.toLowerCase().includes(query) || row.name.toLowerCase().includes(query);
+      return (
+        row.email.toLowerCase().includes(query) ||
+        row.name.toLowerCase().includes(query) ||
+        row.classes.join(" ").toLowerCase().includes(query)
+      );
     });
-  }, [searchTerm, students]);
+  }, [searchTerm, selectedClassId, students]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, pageSize]);
+  }, [searchTerm, selectedClassId, pageSize]);
 
   const totalRows = filteredRows.length;
   const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
@@ -228,13 +295,25 @@ export default function CoachStudentsInsightTable() {
             <h2 className="text-base font-semibold text-gray-800 dark:text-white/90">Students Monitoring</h2>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Core monitoring table for your assigned students.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search nama/email..."
+              placeholder="Search nama/email/kelas..."
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-500/20 sm:w-64 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
             />
+            <select
+              value={selectedClassId}
+              onChange={(event) => setSelectedClassId(event.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 sm:w-auto"
+            >
+              <option value="">Filter by class</option>
+              {classes.map((cls) => (
+                <option key={cls.id} value={cls.id}>
+                  {cls.name}
+                </option>
+              ))}
+            </select>
             <select
               value={pageSize}
               onChange={(event) => setPageSize(parseInt(event.target.value) as 5 | 10)}
@@ -251,6 +330,7 @@ export default function CoachStudentsInsightTable() {
             <thead>
               <tr className="border-b border-gray-100 dark:border-gray-800">
                 <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Nama</th>
+                <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Class</th>
                 <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Status</th>
                 <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Last Activity</th>
                 <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Avg Score</th>
@@ -261,11 +341,11 @@ export default function CoachStudentsInsightTable() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="px-5 py-4 text-sm text-gray-500" colSpan={6}>Loading students...</td>
+                  <td className="px-5 py-4 text-sm text-gray-500" colSpan={7}>Loading students...</td>
                 </tr>
               ) : visibleRows.length === 0 ? (
                 <tr>
-                  <td className="px-5 py-4 text-sm text-gray-500" colSpan={6}>No assigned students found.</td>
+                  <td className="px-5 py-4 text-sm text-gray-500" colSpan={7}>No assigned students found.</td>
                 </tr>
               ) : (
                 visibleRows.map((row) => {
@@ -273,6 +353,9 @@ export default function CoachStudentsInsightTable() {
                   return (
                     <tr key={row.id} className="border-b border-gray-100 last:border-0 dark:border-gray-800">
                       <td className="px-5 py-4 text-sm font-medium text-gray-800 dark:text-white/90">{row.name}</td>
+                      <td className="px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
+                        {row.classes.length > 0 ? row.classes.join(", ") : "-"}
+                      </td>
                       <td className="px-5 py-4 text-sm">
                         <span
                           className={`rounded-full px-2 py-1 text-xs font-medium ${

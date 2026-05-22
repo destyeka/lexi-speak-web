@@ -775,8 +775,8 @@ export default function RoleOverviewPanel({
 
         const { data: topics, error: tErr } = await supabase
           .from("topics")
-          .select("id, unit_id, topic_code, part, title, prompt, is_active, topic_details(id, type, content, order_index)")
-          .order("unit_id, part", { ascending: true });
+          .select("id, part, title, prompt, is_active, topic_details(id, type, content, order_index)")
+          .order("part", { ascending: true });
 
         console.debug("RoleOverviewPanel: fetched session_units/topics", { sessionUnits, topics, suErr, tErr });
 
@@ -793,7 +793,7 @@ export default function RoleOverviewPanel({
         if ((!sessionUnits || sessionUnits.length === 0) && topics && topics.length > 0) {
           const groups = new Map<string, any[]>();
           topics.forEach((t: any) => {
-            const key = t.unit_id || (t.topic_code ? t.topic_code.split("-")[0] : "unknown");
+            const key = t.part != null ? `part-${t.part}` : "unknown";
             const current = groups.get(key);
             if (current) {
               current.push(t);
@@ -853,6 +853,76 @@ export default function RoleOverviewPanel({
         }
 
         const safeSessionUnits = sessionUnits ?? [];
+        const hasTopicMapping = topics.some((t: any) => t.unit_id || t.topic_code);
+
+        if (!hasTopicMapping) {
+          const part1Items: any[] = [];
+          const part3Items: any[] = [];
+          let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;
+
+          topics.forEach((t: any) => {
+            const details = Array.isArray(t.topic_details) ? t.topic_details : [];
+
+            if (t.part === 1) {
+              details.filter((d: any) => d.type === "question").forEach((d: any) => {
+                part1Items.push({ prompt: d.content, reply: "" });
+              });
+            }
+
+            if (t.part === 2) {
+              part2Content.title = t.title || part2Content.title;
+              part2Content.prompt = t.prompt || part2Content.prompt;
+              const bullets = details
+                .filter((d: any) => d.type === "bullet")
+                .sort((a: any, b: any) => (a.order_index || 0) - (b.order_index || 0))
+                .map((d: any) => d.content);
+              part2Content.points = bullets.slice(0, 4);
+              part2Content.takeaway = part2Content.takeaway || "Synchronized from admin";
+            }
+
+            if (t.part === 3) {
+              details.filter((d: any) => d.type === "question").forEach((d: any) => {
+                part3Items.push({ prompt: d.content, reply: "" });
+              });
+            }
+          });
+
+          const topicTitle = part2Content.title || topics[0]?.title || "Topic";
+          const topicPrompt = part2Content.prompt || topics[0]?.prompt || "Start your practice";
+
+          setDynamicUnitCards([
+            {
+              id: "topic-fallback",
+              unitIndex: 1,
+              mode: "learn",
+              title: topicTitle,
+              subtitle: "Learn mode",
+              price: 0,
+              topic: topicPrompt,
+              description: topics[0]?.prompt || "",
+              accent: "from-brand-500 to-brand-300",
+              actionLabel: "Open Learn Hub",
+              parts: [
+                { id: 1, title: "Part 1", hint: "Chatbot warm-up" },
+                { id: 2, title: "Part 2", hint: "Core content card" },
+                { id: 3, title: "Part 3", hint: "Chatbot follow-up" },
+              ],
+              journey: {
+                part1: part1Items,
+                part2: {
+                  title: part2Content.title || "Core concept",
+                  prompt: part2Content.prompt || topicPrompt,
+                  points: part2Content.points || [],
+                  takeaway: part2Content.takeaway || "Synchronized from admin",
+                },
+                part3: part3Items,
+              },
+            },
+          ]);
+          console.debug("RoleOverviewPanel: built fallback card from topics because no unit mapping was available", { count: topics.length });
+          return;
+        }
+
         const cards: JourneyUnitCard[] = safeSessionUnits.map((unit: any) => {
           const seqFormatted = String(unit.seq ?? "").padStart(4, "0");
           const modePrefix = unit.type === "test" ? "TS" : "PT";
@@ -865,7 +935,6 @@ export default function RoleOverviewPanel({
             if (code.includes(`-${seqFormatted}-P`)) return true;
             return false;
           });
-
           const part1Items: any[] = [];
           const part3Items: any[] = [];
           let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;

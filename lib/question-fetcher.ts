@@ -2,8 +2,9 @@ import { supabase } from "@/lib/supabase";
 
 export type TopicDetail = {
   id: string;
-  type: "question" | "bullet";
+  type: "question" | "bullet" | string;
   content: string;
+  prompt?: string | null;
   rubric?: string | null;
   order_index: number;
 };
@@ -15,9 +16,33 @@ export type Topic = {
   part: number;
   title: string;
   prompt?: string;
+  description?: string | null;
   is_active: boolean;
   created_at: string;
   details: TopicDetail[];
+};
+
+export interface AssignmentQuestion {
+  id: string;
+  assignment_id?: string;
+  type?: "question" | "bullet" | string;
+  content: string;
+  prompt?: string | null;
+  order_index: number;
+  rubric?: string | null;
+}
+
+export interface AssignmentRecord {
+  id: string;
+  class_id: string;
+  part: number;
+  title: string;
+  prompt?: string | null;
+  description?: string | null;
+  start_at: string | null;
+  due_at: string | null;
+  is_active: boolean;
+  created_at: string | null;
 };
 
 /**
@@ -66,6 +91,75 @@ export async function getTopicsByPart(part: number): Promise<Topic[]> {
     );
   } catch (error) {
     console.error("Error fetching topics by part:", error);
+    return [];
+  }
+}
+
+export async function getAssignmentQuestions(assignmentId: string): Promise<AssignmentQuestion[]> {
+  try {
+    const { data, error } = await supabase
+      .from("assignment_questions")
+      .select("*")
+      .eq("assignment_id", assignmentId)
+      .order("order_index", { ascending: true });
+
+    if (error) {
+      console.error("Error fetching assignment questions:", error);
+      return [];
+    }
+
+    return (data as AssignmentQuestion[]) || [];
+  } catch (error) {
+    console.error("Error fetching assignment questions:", error);
+    return [];
+  }
+}
+
+export async function getAssignmentTopics(assignmentId: string): Promise<Topic[]> {
+  try {
+    const { data: assignment, error: assignmentError } = await supabase
+      .from("assignments")
+      .select("id, part, title, description, is_active, created_at")
+      .eq("id", assignmentId)
+      .maybeSingle();
+
+    if (assignmentError) {
+      console.error("Error fetching assignment:", assignmentError);
+      return [];
+    }
+
+    if (!assignment) {
+      return [];
+    }
+
+    const questions = await getAssignmentQuestions(assignmentId);
+    const details: TopicDetail[] = questions.map((question) => ({
+      id: question.id,
+      type: question.type || "question",
+      content: question.content,
+      prompt: question.prompt ?? null,
+      rubric: question.rubric ?? null,
+      order_index: question.order_index,
+    }));
+
+    const assignmentPrompt = assignment.description?.trim() ||
+      details.find((d) => d.type === "question" && d.prompt && d.prompt.trim().length > 0)?.prompt?.trim() ||
+      "";
+
+    return [
+      {
+        id: assignment.id,
+        part: assignment.part,
+        title: assignment.title,
+        prompt: assignmentPrompt,
+        description: assignment.description ?? null,
+        is_active: assignment.is_active,
+        created_at: assignment.created_at || new Date().toISOString(),
+        details,
+      },
+    ];
+  } catch (error) {
+    console.error("Error fetching assignment topics:", error);
     return [];
   }
 }

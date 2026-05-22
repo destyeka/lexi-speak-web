@@ -1,20 +1,27 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
+import type { ApexOptions } from "apexcharts";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { InputField } from "@/components/ui/system/InputField";
 import TextButton from "@/components/ui/system/TextButton";
 import { Toggle } from "@/components/ui/system/Toggle";
+import { Modal } from "@/components/ui/modal";
+import { useModal } from "@/hooks/useModal";
 import TextArea from "@/components/form/input/TextArea";
 import DatePicker from "@/components/form/date-picker";
-import { PencilLineIcon, TrashIcon, EyeIcon, CheckIcon, PlusIcon, UsersIcon } from "@phosphor-icons/react";
+import { PencilLineIcon, EyeIcon, PlusIcon, UsersIcon } from "@phosphor-icons/react";
+
+const ReactApexChart = dynamic(() => import("react-apexcharts"), { ssr: false });
 
 interface Assignment {
   id: string;
   class_id: string;
   part: number;
   title: string;
+  prompt: string;
   description: string | null;
   start_at: string | null;
   due_at: string | null;
@@ -26,7 +33,9 @@ interface Question {
   id: string;
   type?: "question" | "bullet" | string;
   content: string;
+  prompt?: string;
   order_index: number;
+  rubric?: string;
 }
 
 interface StudentStatus {
@@ -34,7 +43,43 @@ interface StudentStatus {
   email: string;
   status: string;
   submitted_at: string | null;
+  latest_score: number | null;
 }
+
+interface ClassMemberSummary {
+  id: string;
+  email: string;
+  name: string;
+  latest_score: number | null;
+}
+
+interface ScoreHistoryRow {
+  student_id: string;
+  score: number;
+  recorded_at: string;
+}
+
+interface SubmissionRow {
+  student_id: string;
+  assignment_id: string;
+  submitted_at: string | null;
+}
+
+const formatBand = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  const normalized = value > 9.5 ? value / 10 : value;
+  return Math.max(0, Math.min(9, Number(normalized.toFixed(1))));
+};
+
+const getCurrentLevelLabel = (band: number | null) => {
+  if (band === null) return "-";
+  if (band < 3.5) return "A2 (Elementary)";
+  if (band < 4.5) return "B1 (Intermediate)";
+  if (band < 5.5) return "B1+ (Upper Beginner)";
+  if (band < 6.5) return "B2 (Upper-Intermediate)";
+  if (band < 7.5) return "C1 (Advanced)";
+  return "C1+ (Advanced)";
+};
 
 export default function ClassAssignmentsPage() {
   const params = useParams() as { classId?: string };
@@ -54,6 +99,14 @@ export default function ClassAssignmentsPage() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedAssignmentForStatus, setSelectedAssignmentForStatus] = useState<Assignment | null>(null);
   const [studentStatuses, setStudentStatuses] = useState<StudentStatus[]>([]);
+  const [classMembers, setClassMembers] = useState<ClassMemberSummary[]>([]);
+  const [scoreHistoryRows, setScoreHistoryRows] = useState<ScoreHistoryRow[]>([]);
+  const [submissionRows, setSubmissionRows] = useState<SubmissionRow[]>([]);
+  const [reportLoading, setReportLoading] = useState(true);
+  const [reportNotice, setReportNotice] = useState<string | null>(null);
+  const { isOpen: isReportModalOpen, openModal: openReportModal, closeModal: closeReportModal } = useModal(false);
+  const [selectedReportStudentId, setSelectedReportStudentId] = useState<string>("");
+  const [currentTime] = useState(() => Date.now());
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -124,10 +177,10 @@ export default function ClassAssignmentsPage() {
   const buildQuestionsForPart = (part: number) => {
     if (part === 2) {
       return [
-        { id: crypto.randomUUID(), type: "question", content: "", order_index: 0 },
-        { id: crypto.randomUUID(), type: "bullet", content: "", order_index: 1 },
-        { id: crypto.randomUUID(), type: "bullet", content: "", order_index: 2 },
-        { id: crypto.randomUUID(), type: "bullet", content: "", order_index: 3 },
+        { id: crypto.randomUUID(), type: "question", content: "", prompt: "", order_index: 0, rubric: "" },
+        { id: crypto.randomUUID(), type: "bullet", content: "", prompt: "", order_index: 1, rubric: "" },
+        { id: crypto.randomUUID(), type: "bullet", content: "", prompt: "", order_index: 2, rubric: "" },
+        { id: crypto.randomUUID(), type: "bullet", content: "", prompt: "", order_index: 3, rubric: "" },
       ];
     }
 
@@ -136,7 +189,9 @@ export default function ClassAssignmentsPage() {
       id: crypto.randomUUID(),
       type: "question",
       content: "",
+      prompt: "",
       order_index: index,
+      rubric: "",
     }));
   };
 
@@ -152,22 +207,203 @@ export default function ClassAssignmentsPage() {
     return `Question ${index + 1}`;
   };
 
-  const selectedDateToEndOfDayIso = (dateString: string) => {
-    const [year, month, day] = dateString.split("-").map(Number);
-    if (!year || !month || !day) return null;
-    const date = new Date(year, month - 1, day, 23, 59, 59, 999);
-    return date.toISOString();
-  };
+  const fetchClassInfo = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("classes")
+      .select("name, description")
+      .eq("id", classId)
+      .maybeSingle();
 
-  useEffect(() => {
-    if (!classId) {
-      router.push("/dashboard/coach/class");
-      return;
+    if (!error && data) {
+      setClassName(data.name);
+      setClassDescription(data.description);
     }
-    void initialize();
   }, [classId]);
 
-  const initialize = async () => {
+  const fetchAssignments = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("assignments")
+      .select("*")
+      .eq("class_id", classId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setNotice(error.message);
+      setAssignments([]);
+    } else {
+      setAssignments((data as Assignment[]) || []);
+    }
+    setLoading(false);
+  }, [classId]);
+
+  const getStudentNameFromEmail = (email: string) => {
+    if (!email) return "Unknown Student";
+    return email
+      .split("@")[0]
+      .replace(/[._]/g, " ")
+      .split(" ")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
+  const fetchClassReportData = useCallback(async () => {
+    setReportLoading(true);
+    setReportNotice(null);
+
+    if (!classId) {
+      setReportLoading(false);
+      return;
+    }
+
+    const { data: membersData, error: membersError } = await supabase
+      .from("class_members")
+      .select("student_id")
+      .eq("class_id", classId);
+
+    if (membersError) {
+      setReportNotice(membersError.message);
+      setClassMembers([]);
+      setScoreHistoryRows([]);
+      setReportLoading(false);
+      return;
+    }
+
+    const studentIds = (membersData as { student_id: string }[] | null)
+      ?.map((item) => item.student_id)
+      .filter(Boolean) ?? [];
+
+    if (studentIds.length === 0) {
+      setClassMembers([]);
+      setScoreHistoryRows([]);
+      setReportNotice("No students are currently enrolled in this class.");
+      setReportLoading(false);
+      return;
+    }
+
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("id, email")
+      .in("id", studentIds);
+
+    if (profilesError) {
+      setReportNotice(profilesError.message);
+      setClassMembers([]);
+      setScoreHistoryRows([]);
+      setReportLoading(false);
+      return;
+    }
+
+    const { data: assignmentsData, error: assignmentsError } = await supabase
+      .from("assignments")
+      .select("id")
+      .eq("class_id", classId);
+
+    if (assignmentsError) {
+      setReportNotice(assignmentsError.message);
+      setClassMembers([]);
+      setScoreHistoryRows([]);
+      setReportLoading(false);
+      return;
+    }
+
+    const assignmentIds = ((assignmentsData as { id: string }[] | null) ?? [])
+      .map((assignment) => assignment.id)
+      .filter(Boolean);
+
+    const { data: submissions, error: submissionsError } = await supabase
+      .from("assignment_submissions")
+      .select("student_id, assignment_id, submitted_at")
+      .in("assignment_id", assignmentIds)
+      .in("student_id", studentIds)
+      .eq("status", "submitted");
+
+    if (submissionsError) {
+      setReportNotice(submissionsError.message);
+      setClassMembers([]);
+      setScoreHistoryRows([]);
+      setSubmissionRows([]);
+      setReportLoading(false);
+      return;
+    }
+
+    setSubmissionRows((submissions as SubmissionRow[] | null) ?? []);
+
+    const { data: history, error: historyError } = await supabase
+      .from("student_score_history")
+      .select("student_id, score, recorded_at")
+      .in("student_id", studentIds)
+      .order("recorded_at", { ascending: true });
+
+    if (historyError) {
+      setReportNotice(historyError.message);
+      setClassMembers([]);
+      setScoreHistoryRows([]);
+      setReportLoading(false);
+      return;
+    }
+
+    const scoreHistoryByStudent = new Map<string, ScoreHistoryRow[]>();
+    ((history as ScoreHistoryRow[] | null) ?? []).forEach((row) => {
+      if (!scoreHistoryByStudent.has(row.student_id)) {
+        scoreHistoryByStudent.set(row.student_id, []);
+      }
+      scoreHistoryByStudent.get(row.student_id)?.push(row);
+    });
+
+    const getScoreForSubmission = (studentId: string, submittedAt: string | null) => {
+      if (!submittedAt) return null;
+      const rows = scoreHistoryByStudent.get(studentId) ?? [];
+      let latestRow: ScoreHistoryRow | null = null;
+      const submittedTime = new Date(submittedAt).getTime();
+      rows.forEach((row) => {
+        const recordedTime = new Date(row.recorded_at).getTime();
+        if (recordedTime <= submittedTime) {
+          if (!latestRow || recordedTime > new Date(latestRow.recorded_at).getTime()) {
+            latestRow = row;
+          }
+        }
+      });
+      return latestRow ? Number(latestRow.score) : null;
+    };
+
+    const submissionScoreRows: ScoreHistoryRow[] = ((submissions as SubmissionRow[] | null) ?? [])
+      .map((submission) => {
+        const score = getScoreForSubmission(submission.student_id, submission.submitted_at);
+        if (score === null) return null;
+        return {
+          student_id: submission.student_id,
+          score,
+          recorded_at: submission.submitted_at || new Date().toISOString(),
+        };
+      })
+      .filter((row): row is ScoreHistoryRow => row !== null);
+
+    const latestSubmissionScoreByStudent = new Map<string, ScoreHistoryRow>();
+    submissionScoreRows.forEach((row) => {
+      const existing = latestSubmissionScoreByStudent.get(row.student_id);
+      if (!existing || new Date(row.recorded_at) > new Date(existing.recorded_at)) {
+        latestSubmissionScoreByStudent.set(row.student_id, row);
+      }
+    });
+
+    setClassMembers(
+      ((profiles as { id: string; email: string }[] | null) ?? []).map((profile) => ({
+        id: profile.id,
+        email: profile.email,
+        name: getStudentNameFromEmail(profile.email || ""),
+        latest_score: latestSubmissionScoreByStudent.get(profile.id)?.score ?? null,
+      }))
+    );
+
+    setScoreHistoryRows(submissionScoreRows);
+    if (!submissionScoreRows.length) {
+      setReportNotice("No submitted assignment history is available for this class yet.");
+    }
+    setReportLoading(false);
+  }, [classId]);
+
+  const initialize = useCallback(async () => {
     setLoading(true);
     setNotice(null);
 
@@ -193,38 +429,22 @@ export default function ClassAssignmentsPage() {
 
     await fetchClassInfo();
     await fetchAssignments();
+    await fetchClassReportData();
     setLoading(false);
-  };
+  }, [router, fetchClassInfo, fetchAssignments, fetchClassReportData]);
 
-  const fetchClassInfo = async () => {
-    const { data, error } = await supabase
-      .from("classes")
-      .select("name, description")
-      .eq("id", classId)
-      .maybeSingle();
-
-    if (!error && data) {
-      setClassName(data.name);
-      setClassDescription(data.description);
+  useEffect(() => {
+    if (!classId) {
+      router.push("/dashboard/coach/class");
+      return;
     }
-  };
 
-  const fetchAssignments = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("assignments")
-      .select("*")
-      .eq("class_id", classId)
-      .order("created_at", { ascending: false });
+    const timeout = window.setTimeout(() => {
+      void initialize();
+    }, 0);
 
-    if (error) {
-      setNotice(error.message);
-      setAssignments([]);
-    } else {
-      setAssignments((data as Assignment[]) || []);
-    }
-    setLoading(false);
-  };
+    return () => window.clearTimeout(timeout);
+  }, [initialize, classId, router]);
 
   const fetchAssignmentQuestions = async (assignment: Assignment) => {
     const { data, error } = await supabase
@@ -239,6 +459,189 @@ export default function ClassAssignmentsPage() {
       setSelectedQuestions([]);
     }
   };
+
+  const reportRows = useMemo(() => {
+    if (selectedReportStudentId) {
+      return scoreHistoryRows
+        .filter((row) => row.student_id === selectedReportStudentId)
+        .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+    }
+
+    return [...scoreHistoryRows].sort(
+      (a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
+    );
+  }, [scoreHistoryRows, selectedReportStudentId]);
+
+  const classReportSeries = useMemo(() => {
+    if (selectedReportStudentId) {
+      const data = reportRows.map((row) => ({ x: row.recorded_at, y: Number(row.score) }));
+      return {
+        categories: [],
+        dailyCounts: [],
+        series: [{ name: "Student score", data }],
+      };
+    }
+
+    const scoreByDate = new Map<string, { total: number; count: number }>();
+
+    reportRows.forEach((row) => {
+      const dateKey = new Date(row.recorded_at).toLocaleDateString("en-US", {
+        day: "numeric",
+        month: "short",
+      });
+
+      const existing = scoreByDate.get(dateKey) ?? { total: 0, count: 0 };
+      scoreByDate.set(dateKey, {
+        total: existing.total + Number(row.score),
+        count: existing.count + 1,
+      });
+    });
+
+    const endDate = new Date();
+    endDate.setHours(0, 0, 0, 0);
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - 29);
+
+    const categories: string[] = [];
+    const averageData: Array<number | null> = [];
+    const dailyCounts: number[] = [];
+
+    for (let date = new Date(startDate); date <= endDate; date.setDate(date.getDate() + 1)) {
+      const dateKey = date.toLocaleDateString("en-US", {
+        day: "numeric",
+        month: "short",
+      });
+      categories.push(dateKey);
+
+      const item = scoreByDate.get(dateKey);
+      if (item?.count) {
+        averageData.push(Math.round((item.total / item.count) * 10) / 10);
+        dailyCounts.push(item.count);
+      } else {
+        averageData.push(null);
+        dailyCounts.push(0);
+      }
+    }
+
+    return {
+      categories,
+      dailyCounts,
+      series: [{ name: "Class average", data: averageData }],
+    };
+  }, [reportRows, selectedReportStudentId]);
+
+  const classReportOptions = useMemo<ApexOptions>(() => ({
+    chart: {
+      id: "class-score-trend",
+      toolbar: { show: false },
+      zoom: { enabled: false },
+    },
+    stroke: { curve: "smooth", width: 3 },
+    markers: { size: 0 },
+    dataLabels: { enabled: false },
+    xaxis: selectedReportStudentId
+      ? {
+          type: "datetime",
+          labels: { style: { colors: "#6b7280", fontSize: "12px" } },
+        }
+      : {
+          categories: classReportSeries.categories,
+          labels: { style: { colors: "#6b7280", fontSize: "12px" } },
+        },
+    yaxis: selectedReportStudentId
+      ? {
+          min: 0,
+          max: 9,
+          tickAmount: 10,
+          labels: { formatter: (value) => `${Math.round(value * 10) / 10}` },
+        }
+      : {
+          title: { text: "Avg score", style: { color: "#2563eb" } },
+          min: 0,
+          max: 9,
+          tickAmount: 10,
+          labels: { formatter: (value) => `${Math.round(value * 10) / 10}` },
+        },
+    grid: { strokeDashArray: 3, borderColor: "#e5e7eb" },
+    tooltip: {
+      theme: "light",
+      x: { format: "dd MMM" },
+      y: {
+        formatter: (value, { dataPointIndex }) => {
+          const attempts = classReportSeries.dailyCounts?.[dataPointIndex];
+          const averageValue = `${Math.round(Number(value) * 10) / 10}`;
+          return attempts !== undefined
+            ? `${averageValue}\nTotal attempts: ${attempts}`
+            : averageValue;
+        },
+      },
+    },
+  }), [classReportSeries.categories, classReportSeries.dailyCounts, selectedReportStudentId]);
+
+  const selectedReportStudent = useMemo(
+    () => classMembers.find((member) => member.id === selectedReportStudentId) || null,
+    [classMembers, selectedReportStudentId]
+  );
+
+  const studentSelectOptions = useMemo(
+    () => classMembers.map((member) => ({
+      value: member.id,
+      label: `${member.name} (${member.email})`,
+    })),
+    [classMembers]
+  );
+
+  const reportTitle = selectedReportStudent
+    ? `Student Progress Report – ${selectedReportStudent.name}`
+    : "Class Progress Report";
+
+  const reportSummary = useMemo(() => {
+    const studentScores = reportRows.map((row) => Number(row.score));
+    const averageFromCurrentChart = studentScores.length
+      ? Math.round((studentScores.reduce((sum, score) => sum + score, 0) / studentScores.length) * 10) / 10
+      : null;
+
+    const classScoreRows = !selectedReportStudentId ? reportRows : [];
+    const averageScore = selectedReportStudentId
+      ? averageFromCurrentChart
+      : classScoreRows.length
+      ? Math.round((classScoreRows.reduce((sum, row) => sum + Number(row.score), 0) / classScoreRows.length) * 10) / 10
+      : null;
+
+    const assignmentCompletedCount = selectedReportStudentId
+      ? submissionRows.filter((row) => row.student_id === selectedReportStudentId).length
+      : submissionRows.length;
+
+    const progressPercent = selectedReportStudentId
+      ? assignments.length > 0
+        ? Math.round((assignmentCompletedCount / assignments.length) * 100)
+        : null
+      : classMembers.length > 0 && assignments.length > 0
+        ? Math.round((assignmentCompletedCount / (assignments.length * classMembers.length)) * 100)
+        : null;
+
+    const latestScoreAverage = selectedReportStudentId
+      ? selectedReportStudent?.latest_score ?? null
+      : (() => {
+          const scores = classMembers
+            .map((member) => member.latest_score)
+            .filter((score): score is number => score !== null);
+          if (!scores.length) return null;
+          return Math.round((scores.reduce((sum, score) => sum + score, 0) / scores.length) * 10) / 10;
+        })();
+
+    const estimatedBand = latestScoreAverage !== null ? formatBand(latestScoreAverage) : null;
+    const currentLevel = getCurrentLevelLabel(estimatedBand);
+
+    return {
+      totalStudents: classMembers.length,
+      averageScore,
+      assignmentCompletedCount,
+      progressPercent,
+      currentLevel,
+      estimatedBand,
+    };
+  }, [assignments.length, classMembers, reportRows, selectedReportStudent, selectedReportStudentId, submissionRows]);
 
   const handleCreateAssignment = async () => {
     if (!newTitle.trim()) {
@@ -282,14 +685,21 @@ export default function ClassAssignmentsPage() {
     }
 
     if (newQuestions.length > 0) {
-      const { error: questionError } = await supabase.from("assignment_questions").insert(
-        newQuestions.map((q, index) => ({
+      const questionRows = newQuestions.map((q, index) => {
+        const row: Record<string, unknown> = {
           assignment_id: data.id,
           content: q.content,
           order_index: index,
           type: q.type ?? "question",
-        }))
-      );
+          rubric: q.rubric ?? "",
+        };
+        if (q.prompt != null) {
+          row.prompt = q.prompt;
+        }
+        return row;
+      });
+
+      const { error: questionError } = await supabase.from("assignment_questions").insert(questionRows);
 
       if (questionError) {
         console.error("Error saving assignment questions:", questionError);
@@ -351,14 +761,21 @@ export default function ClassAssignmentsPage() {
     }
 
     if (editQuestions.length > 0) {
-      const { error: questionError } = await supabase.from("assignment_questions").insert(
-        editQuestions.map((q, index) => ({
+      const questionRows = editQuestions.map((q, index) => {
+        const row: Record<string, unknown> = {
           assignment_id: editAssignment.id,
           content: q.content,
           order_index: index,
           type: q.type ?? "question",
-        }))
-      );
+          rubric: q.rubric ?? "",
+        };
+        if (q.prompt != null) {
+          row.prompt = q.prompt;
+        }
+        return row;
+      });
+
+      const { error: questionError } = await supabase.from("assignment_questions").insert(questionRows);
 
       if (questionError) {
         console.error("Error updating assignment questions:", questionError);
@@ -457,14 +874,42 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
-    // Combine data
-    const statuses: StudentStatus[] = profiles.map(profile => {
-      const submission = submissions?.find(s => s.student_id === profile.id);
+    const { data: scoreRows, error: scoreError } = await supabase
+      .from("student_score_history")
+      .select("student_id, score, recorded_at")
+      .in("student_id", studentIds)
+      .order("recorded_at", { ascending: false });
+
+    if (scoreError) {
+      console.error("Error fetching score history:", scoreError);
+    }
+
+    const historyByStudent = new Map<string, ScoreHistoryRow[]>();
+    (scoreRows as ScoreHistoryRow[] | null ?? []).forEach((row) => {
+      if (!historyByStudent.has(row.student_id)) {
+        historyByStudent.set(row.student_id, []);
+      }
+      historyByStudent.get(row.student_id)?.push(row);
+    });
+
+    const getScoreForSubmission = (studentId: string, submittedAt: string | null) => {
+      const rows = historyByStudent.get(studentId) ?? [];
+      if (!submittedAt) {
+        return rows.length > 0 ? Number(rows[0].score) : null;
+      }
+      const submittedTime = new Date(submittedAt).getTime();
+      const matchingRow = rows.find((row) => new Date(row.recorded_at).getTime() <= submittedTime);
+      return matchingRow ? Number(matchingRow.score) : null;
+    };
+
+    const statuses: StudentStatus[] = profiles.map((profile) => {
+      const submission = submissions?.find((s) => s.student_id === profile.id);
       return {
         student_id: profile.id,
         email: profile.email || "Unknown",
         status: submission ? submission.status : "Not Started",
         submitted_at: submission?.submitted_at || null,
+        latest_score: getScoreForSubmission(profile.id, submission?.submitted_at || null),
       };
     });
 
@@ -484,6 +929,131 @@ export default function ClassAssignmentsPage() {
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Create manual assignments for your students. Questions are stored separately from the admin question bank.</p>
           {classDescription ? <p className="mt-2 text-sm text-gray-500">{classDescription}</p> : null}
           {notice ? <p className="mt-3 text-sm text-error-600">{notice}</p> : null}
+        </div>
+
+        <div className="mb-8 rounded-2xl border border-gray-200 bg-white p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">{reportTitle}</h2>
+              <p className="mt-1 text-sm text-gray-500">Track student score trends and choose a student to view a focused report.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={openReportModal}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-primary-200 bg-white px-4 py-2 text-sm font-semibold text-primary-700 shadow-sm transition hover:bg-primary-50"
+              >
+                <UsersIcon weight="bold" size={18} />
+                Lihat report
+              </button>
+              <div className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-600">
+                {reportLoading ? "Loading report..." : `${reportSummary.totalStudents} students enrolled`}
+              </div>
+            </div>
+          </div>
+
+          {reportNotice ? <p className="mt-4 text-sm text-gray-500">{reportNotice}</p> : null}
+
+          <Modal isOpen={isReportModalOpen} onClose={closeReportModal} className="max-w-6xl m-4 p-0">
+            <div className="rounded-[32px] bg-white p-6 shadow-xl dark:bg-slate-950">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white">{reportTitle}</h3>
+                  <p className="mt-2 text-sm text-gray-500">
+                    {selectedReportStudent
+                      ? `Laporan individu untuk ${selectedReportStudent.name}. Data diambil dari history skor siswa.`
+                      : "Menampilkan rata-rata kelas berdasarkan student_score_history. Pilih siswa untuk melihat perkembangan individu."}
+                  </p>
+                  {!selectedReportStudent ? (
+                    <p className="mt-2 text-sm text-gray-500">
+                      Nilai seperti 3.8 / 5.6 / 5.0 berasal dari ringkasan semua skor pada tanggal tersebut, bukan hanya nilai assignment tertentu.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-[1fr_auto] items-end">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-gray-700">Pilih siswa</label>
+                  <select
+                    className="h-11 w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-theme-xs focus:border-brand-300 focus:outline-none focus:ring-3 focus:ring-brand-500/10"
+                    value={selectedReportStudentId}
+                    onChange={(event) => setSelectedReportStudentId(event.target.value)}
+                  >
+                    <option value="">Semua siswa</option>
+                    {studentSelectOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedReportStudent ? (
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Selected student</p>
+                    <p className="mt-2 text-lg font-semibold text-gray-900">{selectedReportStudent.name}</p>
+                    <p className="text-sm text-gray-500">{selectedReportStudent.email}</p>
+                  </div>
+                ) : null}
+              </div>
+
+              {selectedReportStudent ? (
+                <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Current level</p>
+                    <p className="mt-2 text-2xl font-semibold text-gray-900">{reportSummary.currentLevel}</p>
+                  </div>
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Estimated IELTS Band</p>
+                    <p className="mt-2 text-2xl font-semibold text-gray-900">
+                      {reportSummary.estimatedBand !== null ? reportSummary.estimatedBand.toFixed(1) : "N/A"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Progress assignment</p>
+                    <p className="mt-2 text-2xl font-semibold text-gray-900">
+                      {reportSummary.progressPercent !== null ? `${reportSummary.progressPercent}%` : "-"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Students</p>
+                    <p className="mt-2 text-2xl font-semibold text-gray-900">{reportSummary.totalStudents}</p>
+                  </div>
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Avg score</p>
+                    <p className="mt-2 text-2xl font-semibold text-gray-900">
+                      {reportSummary.averageScore !== null ? `${reportSummary.averageScore}` : "N/A"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Last updated</p>
+                    <p className="mt-2 text-2xl font-semibold text-gray-900">
+                      {reportRows.length > 0 ? new Date(reportRows[reportRows.length - 1].recorded_at).toLocaleDateString() : "-"}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-6 overflow-hidden rounded-2xl border border-gray-200 bg-white p-4">
+                {reportLoading ? (
+                  <p className="text-sm text-gray-500">Loading chart...</p>
+                ) : classReportSeries.series[0]?.data?.length ? (
+                  <>
+                    <ReactApexChart options={classReportOptions} series={classReportSeries.series} type="line" height={320} />
+                    {!selectedReportStudent ? (
+                      <p className="mt-3 text-sm text-gray-500">Hover or tap a data point to see total attempts for that day.</p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">No score history is available yet.</p>
+                )}
+              </div>
+
+            </div>
+          </Modal>
         </div>
 
         <div className="mb-8 flex flex-wrap gap-4 items-center justify-between">
@@ -530,7 +1100,7 @@ export default function ClassAssignmentsPage() {
                 ) : (
                   assignments.map((assignment) => {
                     const dueDate = assignment.due_at ? new Date(assignment.due_at) : null;
-                    const isExpired = dueDate ? dueDate.getTime() < Date.now() : false;
+                    const isExpired = dueDate ? dueDate.getTime() < currentTime : false;
                     return (
                       <tr key={assignment.id} className="border-b last:border-0 hover:bg-gray-50 dark:hover:bg-white/5">
                         <td className="px-5 py-4 text-sm font-medium">{assignment.title}</td>
@@ -592,9 +1162,11 @@ export default function ClassAssignmentsPage() {
                 </div>
               </div>
               <div className="space-y-6 p-6">
+                {/* assignment-level prompt removed; prompts are per-question now */}
                 {selectedAssignment.description ? (
                   <p className="text-sm text-gray-600">{selectedAssignment.description}</p>
                 ) : null}
+                {/* assignment-level metrics removed; use per-question rubric instead */}
                 <div className="space-y-3">
                   <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">Questions</h3>
                   {selectedQuestions.length === 0 ? (
@@ -603,8 +1175,18 @@ export default function ClassAssignmentsPage() {
                     <div className="space-y-3">
                       {selectedQuestions.map((question, idx) => (
                         <div key={question.id} className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                          <p className="text-sm font-semibold text-gray-900">Question {idx + 1}</p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {question.type === "bullet" ? `Bullet ${idx + 1}` : `Question ${idx + 1}`}
+                          </p>
                           <p className="mt-2 text-sm text-gray-600">{question.content}</p>
+                          {question.rubric ? (
+                            <div className="mt-4 space-y-3">
+                              <div className="rounded-2xl border border-gray-200 bg-white p-3">
+                                <p className="text-sm font-semibold text-gray-900">Rubric</p>
+                                <p className="text-sm text-gray-600 mt-2">{question.rubric}</p>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>
@@ -726,7 +1308,7 @@ export default function ClassAssignmentsPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setNewQuestions((prev) => [...prev, { id: crypto.randomUUID(), type: "question", content: "", order_index: prev.length }])}
+                      onClick={() => setNewQuestions((prev) => [...prev, { id: crypto.randomUUID(), type: "question", content: "", prompt: "", order_index: prev.length, rubric: "" }])}
                       className="text-primary text-sm"
                     >
                       Add Question
@@ -745,9 +1327,10 @@ export default function ClassAssignmentsPage() {
                               value={question.type ?? "question"}
                               onChange={(e) => {
                                 const updated = [...newQuestions];
+                                const nextType = e.target.value as "question" | "bullet";
                                 updated[index] = {
                                   ...updated[index],
-                                  type: e.target.value as "question" | "bullet",
+                                  type: nextType,
                                 };
                                 setNewQuestions(updated);
                               }}
@@ -769,7 +1352,7 @@ export default function ClassAssignmentsPage() {
                                   ? "Enter bullet point"
                                   : newPart === 2 && index === 0
                                   ? "Enter cue card title or topic"
-                                  : "Enter prompt or answer guidance"
+                                  : "Enter question content"
                               }
                             />
                           </div>
@@ -781,6 +1364,40 @@ export default function ClassAssignmentsPage() {
                             ✕
                           </button>
                         </div>
+                        {question.type === "question" ? (
+                          <div className="mt-4 space-y-4">
+                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                              <div className="mb-3">
+                                <p className="text-sm font-semibold text-gray-800">Prompt</p>
+                                <p className="text-xs text-gray-500">Enter a prompt for this question.</p>
+                              </div>
+                              <TextArea
+                                className="w-full"
+                                value={question.prompt || ""}
+                                onChange={(value) => {
+                                  setNewQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, prompt: value } : item)));
+                                }}
+                                placeholder="Enter question prompt"
+                                rows={3}
+                              />
+                            </div>
+                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                              <div className="mb-3">
+                                <p className="text-sm font-semibold text-gray-800">Rubric</p>
+                                <p className="text-xs text-gray-500">Enter rubric for this question (paragraph).</p>
+                              </div>
+                              <TextArea
+                                className="w-full"
+                                value={question.rubric || ""}
+                                onChange={(value) => {
+                                  setNewQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, rubric: value } : item)));
+                                }}
+                                placeholder="Enter rubric (paragraph)"
+                                rows={5}
+                              />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -845,6 +1462,8 @@ export default function ClassAssignmentsPage() {
                     />
                   </label>
 
+                  {/* assignment-level metrics removed; per-question rubric used instead */}
+
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-sm font-medium">Activate assignment</span>
                     <Toggle checked={editActive} onChange={setEditActive} />
@@ -905,7 +1524,7 @@ export default function ClassAssignmentsPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setEditQuestions((prev) => [...prev, { id: crypto.randomUUID(), type: "question", content: "", order_index: prev.length }])}
+                      onClick={() => setEditQuestions((prev) => [...prev, { id: crypto.randomUUID(), type: "question", content: "", prompt: "", order_index: prev.length, rubric: "" }])}
                       className="text-primary text-sm"
                     >
                       Add Question
@@ -924,9 +1543,10 @@ export default function ClassAssignmentsPage() {
                               value={question.type ?? "question"}
                               onChange={(e) => {
                                 const updated = [...editQuestions];
+                                const nextType = e.target.value as "question" | "bullet";
                                 updated[index] = {
                                   ...updated[index],
-                                  type: e.target.value as "question" | "bullet",
+                                  type: nextType,
                                 };
                                 setEditQuestions(updated);
                               }}
@@ -946,7 +1566,7 @@ export default function ClassAssignmentsPage() {
                                   ? "Enter bullet point"
                                   : editPart === 2 && index === 0
                                   ? "Enter cue card title or topic"
-                                  : "Enter prompt or answer guidance"
+                                  : "Enter question content"
                               }
                             />
                           </div>
@@ -958,6 +1578,36 @@ export default function ClassAssignmentsPage() {
                             ✕
                           </button>
                         </div>
+                        {question.type === "question" ? (
+                          <div className="mt-4 space-y-4">
+                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                              <div className="mb-3">
+                                <p className="text-sm font-semibold text-gray-800">Prompt</p>
+                                <p className="text-xs text-gray-500">Enter a prompt for this question.</p>
+                              </div>
+                              <TextArea
+                                className="w-full"
+                                value={question.prompt || ""}
+                                onChange={(value) => setEditQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, prompt: value } : item)))}
+                                placeholder="Enter question prompt"
+                                rows={3}
+                              />
+                            </div>
+                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                              <div className="mb-3">
+                                <p className="text-sm font-semibold text-gray-800">Rubric</p>
+                                <p className="text-xs text-gray-500">Enter rubric for this question (paragraph).</p>
+                              </div>
+                              <TextArea
+                                className="w-full"
+                                value={question.rubric || ""}
+                                onChange={(value) => setEditQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, rubric: value } : item)))}
+                                placeholder="Enter rubric (paragraph)"
+                                rows={5}
+                              />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -1003,12 +1653,13 @@ export default function ClassAssignmentsPage() {
                           <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Student Email</th>
                           <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Status</th>
                           <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Submitted At</th>
+                          <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Score at submission</th>
                         </tr>
                       </thead>
                       <tbody>
                         {studentStatuses.length === 0 ? (
                           <tr>
-                            <td colSpan={3} className="px-5 py-4 text-sm text-gray-500">No students found in this class.</td>
+                            <td colSpan={4} className="px-5 py-4 text-sm text-gray-500">No students found in this class.</td>
                           </tr>
                         ) : (
                           studentStatuses.map((student) => (
@@ -1031,6 +1682,9 @@ export default function ClassAssignmentsPage() {
                               </td>
                               <td className="px-5 py-4 text-sm text-gray-500">
                                 {student.submitted_at ? formatDate(student.submitted_at) : '-'}
+                              </td>
+                              <td className="px-5 py-4 text-sm text-gray-500">
+                                {typeof student.latest_score === 'number' ? student.latest_score.toFixed(1) : '-'}
                               </td>
                             </tr>
                           ))

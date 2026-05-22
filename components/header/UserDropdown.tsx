@@ -59,7 +59,7 @@ export default function UserDropdown() {
       const { data: profile, error } = await supabase
         .from("profiles")
         // Request only safe/common columns to avoid PostgREST 400 if schema differs
-        .select("id, email")
+        .select("id, email, full_name, name, first_name, last_name")
         .eq("id", user.id)
         .maybeSingle();
 

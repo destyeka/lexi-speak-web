@@ -10,6 +10,7 @@ interface Assignment {
   class_id: string;
   part?: number;
   title: string;
+  prompt?: string;
   description: string | null;
   start_at: string | null;
   due_at: string | null;
@@ -152,7 +153,7 @@ export default function StudentClassAssignmentPage() {
       .from("assignment_submissions")
       .upsert(submissionPayload, { onConflict: "assignment_id,student_id" });
 
-    router.push(`/learn?assignmentId=${assignment.id}&part=${assignment.part ?? 1}&autostart=1`);
+    router.push(`/learn?assignmentId=${assignment.id}&part=${assignment.part ?? 1}`);
   };
 
   if (loading) {
@@ -208,6 +209,7 @@ export default function StudentClassAssignmentPage() {
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <h3 className="text-xl font-semibold text-slate-900">{assignment.title}</h3>
+                      {/* assignment-level prompt removed; prompts are per-question now */}
                       <p className="mt-3 text-sm leading-6 text-slate-600">{assignment.description || "Tidak ada deskripsi tugas."}</p>
                       <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-500">
                         <span>Part: {assignment.part ?? 1}</span>
@@ -247,11 +249,14 @@ export default function StudentClassAssignmentPage() {
                         ? "Assignment sudah lewat tenggat waktu."
                         : isLocked
                         ? `Assignment akan tersedia mulai ${formatDate(assignment.start_at)}.`
+                        : submission?.status === "submitted"
+                        ? "Assignment sudah selesai dan tidak bisa dikerjakan ulang."
                         : "Klik untuk mulai atau lanjutkan tugas."}
                     </p>
                     <button
                       type="button"
                       onClick={async () => {
+                        if (submission?.status === "submitted") return;
                         const duePassed = assignment.due_at ? new Date(assignment.due_at).getTime() < Date.now() : false;
                         if (duePassed) {
                           alert("Assignment is expired and cannot be started.");
@@ -264,17 +269,19 @@ export default function StudentClassAssignmentPage() {
                         }
                         await handleStartAssignment(assignment);
                       }}
-                      disabled={isExpired || isLocked}
+                      disabled={isExpired || isLocked || submission?.status === "submitted"}
                       className={
                         `inline-flex items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold transition ${
-                          isExpired || isLocked
+                          submission?.status === "submitted"
+                            ? "bg-slate-200 text-slate-900 cursor-not-allowed"
+                            : isExpired || isLocked
                             ? "bg-slate-300 text-slate-600 cursor-not-allowed"
                             : "bg-primary text-white hover:bg-primary/90"
                         }`
                       }
                     >
                       <PlayIcon size={18} />
-                      <span className="ml-2">Start</span>
+                      <span className="ml-2">{submission?.status === "submitted" ? "Completed" : "Start"}</span>
                     </button>
                   </div>
                 </div>
