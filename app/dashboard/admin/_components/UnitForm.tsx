@@ -41,6 +41,9 @@ export default function UnitForm({
   const [price, setPrice] =
     useState("");
 
+  const [isPublic, setIsPublic] =
+    useState(false);
+
   const [isActive, setIsActive] = useState(true);
 
   const [customCategories, setCustomCategories] =
@@ -180,6 +183,10 @@ export default function UnitForm({
 
         setAccessLevel(
           sessionData.access_level
+        );
+
+        setIsPublic(
+          sessionData.is_public ?? true
         );
 
         setPrice(
@@ -458,6 +465,8 @@ export default function UnitForm({
 
             is_active: isActive,
 
+            is_public: isPublic,
+
             category,
           })
           .select()
@@ -499,6 +508,8 @@ export default function UnitForm({
                 : null,
 
             is_active: isActive,
+
+            is_public: isPublic,
 
             category,
 
@@ -911,13 +922,32 @@ export default function UnitForm({
 
           {/* ACTIVE */}
           <div className="mb-8 flex items-center justify-between">
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            <p className="text-sm font-semibold text-primary">
               Activate Unit
-            </span>
+            </p>
 
             <Toggle
               checked={isActive}
               onChange={setIsActive}
+            />
+          </div>
+
+          {/* VISIBILITY */}
+          <div className="mb-6 flex items-center justify-between">
+
+            <div>
+              <p className="text-sm font-semibold text-primary">
+                Public Access
+              </p>
+
+              <p className="mt-1 text-xs text-gray-400">
+                Allow coaches to use this unit.
+              </p>
+            </div>
+
+            <Toggle
+              checked={isPublic}
+              onChange={setIsPublic}
             />
           </div>
 

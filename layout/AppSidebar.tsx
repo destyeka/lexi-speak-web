@@ -62,6 +62,7 @@ const adminNavItems: NavItem[] = [
     subItems: [
       { name: "Overview", path: "/dashboard/admin", pro: false },
       { name: "Coach Insight", path: "/dashboard/admin/coach", pro: false },
+      { name: "Classes Insight", path: "/dashboard/admin/classes", pro: false },
       { name: "Students Insight", path: "/dashboard/admin/students", pro: false },
     ],
   },
