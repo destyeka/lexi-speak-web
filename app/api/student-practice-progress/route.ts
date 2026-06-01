@@ -42,6 +42,10 @@ export async function POST(request: Request) {
     const lastPartIndex = Number(body.last_part_index);
     const notes = body.notes ?? null;
     const metrics = Array.isArray(body.metrics) ? body.metrics : [];
+    console.log(
+      "API RECEIVED METRICS",
+      JSON.stringify(metrics, null, 2)
+    );
 
     if (!Number.isFinite(latestScore) || !Number.isFinite(progressPercent) || !Number.isFinite(lastPartIndex) || !lastActivityAt) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -82,8 +86,11 @@ export async function POST(request: Request) {
     });
 
     if (!rpcError) {
+      console.log("RPC SUCCESS");
       return NextResponse.json({ ok: true, mode: "rpc" });
     }
+
+    console.log("RPC FAILED", rpcError);
 
     const { data: existingProgress, error: progressReadError } = await supabase
       .from("student_progress")
