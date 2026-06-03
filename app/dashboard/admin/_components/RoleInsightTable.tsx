@@ -85,6 +85,12 @@ export default function RoleInsightTable({
   const [selectedStudent, setSelectedStudent] =
     useState<any>(null);
 
+  const [isSummaryOpen, setIsSummaryOpen] =
+    useState(false);
+
+  const [selectedAttempt, setSelectedAttempt] =
+    useState<any>(null);
+
   const [scoreHistory, setScoreHistory] =
     useState<any[]>([]);
 
@@ -122,6 +128,7 @@ export default function RoleInsightTable({
   const [exportColumns,
     setExportColumns] =
     useState<string[]>([
+      "type",
       "score",
       "attempts",
       "unit",
@@ -207,7 +214,8 @@ export default function RoleInsightTable({
         recorded_by,
         metrics,
         unit_index,
-        part_index
+        part_index,
+        attempt_type
       `)
         .eq("student_id", student.id)
         .order("recorded_at", {
@@ -2849,6 +2857,7 @@ export default function RoleInsightTable({
   ">
 
                         {[
+                          ["type", "Type"],
                           ["score", "Score"],
                           ["attempts", "Attempts"],
                           ["unit", "Unit"],
@@ -3158,6 +3167,15 @@ export default function RoleInsightTable({
                                 Record<string, any> = {};
 
                               if (
+                                exportColumns.includes("type")
+                              ) {
+                                row.Type =
+                                  item.attempt_type === "test"
+                                    ? "Test"
+                                    : "Practice";
+                              }
+
+                              if (
                                 exportColumns.includes(
                                   "score"
                                 )
@@ -3274,6 +3292,10 @@ export default function RoleInsightTable({
                         </th>
 
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">
+                          Type
+                        </th>
+
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">
                           Score
                         </th>
 
@@ -3293,6 +3315,10 @@ export default function RoleInsightTable({
                           Recorded
                         </th>
 
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">
+                          Summary
+                        </th>
+
                       </tr>
 
                     </thead>
@@ -3304,7 +3330,7 @@ export default function RoleInsightTable({
                         <tr>
 
                           <td
-                            colSpan={6}
+                            colSpan={7}
                             className="
           px-4 py-10 text-center
           text-sm text-gray-500
@@ -3362,6 +3388,22 @@ export default function RoleInsightTable({
                                 />
                               </td>
 
+                              <td className="px-4 py-3 text-sm">
+                                <span
+                                  className={`
+      rounded-full px-3 py-1 text-xs font-semibold
+      ${item.attempt_type === "test"
+                                      ? "bg-purple-100 text-purple-700"
+                                      : "bg-blue-100 text-blue-700"
+                                    }
+    `}
+                                >
+                                  {item.attempt_type === "test"
+                                    ? "Test"
+                                    : "Practice"}
+                                </span>
+                              </td>
+
                               <td className={`
   px-4 py-3
   text-sm font-semibold
@@ -3392,12 +3434,10 @@ export default function RoleInsightTable({
                                 }
                               </td>
 
-                              <td className="
-                      px-4 py-3 text-sm
-                    ">
-                                Part {
-                                  item.part_index
-                                }
+                              <td className="px-4 py-3 text-sm">
+                                {item.attempt_type === "test"
+                                  ? "All Parts"
+                                  : `Part ${item.part_index}`}
                               </td>
 
                               <td className="
@@ -3407,6 +3447,23 @@ export default function RoleInsightTable({
                                 {new Date(
                                   item.recorded_at
                                 ).toLocaleString()}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                <button
+                                  onClick={() => {
+                                    setSelectedAttempt(item);
+                                    setIsSummaryOpen(true);
+                                  }}
+                                  className="
+      rounded-lg border
+      px-3 py-1.5 text-xs
+      font-medium
+      hover:bg-gray-50
+    "
+                                >
+                                  View Summary
+                                </button>
                               </td>
 
                             </tr>
@@ -3423,6 +3480,112 @@ export default function RoleInsightTable({
           </div>
         </div>
       )}
+
+      {isSummaryOpen &&
+        selectedAttempt && (
+          <div className="
+  fixed inset-0 z-[100001]
+  flex items-center justify-center
+  bg-black/40
+">
+            <div className="
+    w-full max-w-3xl
+    rounded-2xl bg-white
+    p-6 shadow-lg
+  ">
+
+              <div className="
+      mb-5 flex items-center
+      justify-between
+    ">
+                <div>
+                  <h2 className="
+          text-xl font-semibold
+        ">
+                    Attempt Summary
+                  </h2>
+
+                  <p className="
+          mt-1 text-sm text-gray-500
+        ">
+                    {new Date(
+                      selectedAttempt.recorded_at
+                    ).toLocaleString()}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() =>
+                    setIsSummaryOpen(false)
+                  }
+                  className="
+          rounded-lg border
+          px-4 py-2 text-sm
+        "
+                >
+                  Close
+                </button>
+              </div>
+
+              {!selectedAttempt.metrics?.length ? (
+                <div
+                  className="
+      rounded-xl border
+      p-6 text-center
+      text-sm text-gray-500
+    "
+                >
+                  No summary available for this attempt.
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  {selectedAttempt.metrics.map(
+                    (metric: any) => (
+                      <div
+                        key={metric.id}
+                        className="
+            rounded-xl border
+            p-4
+          "
+                      >
+                        <div
+                          className="
+              flex items-center
+              justify-between
+            "
+                        >
+                          <h3 className="font-semibold">
+                            {metric.label}
+                          </h3>
+
+                          <span
+                            className="
+                rounded-full
+                bg-primary/10
+                px-3 py-1
+                text-sm font-medium
+              "
+                          >
+                            {metric.score}
+                          </span>
+                        </div>
+
+                        <p
+                          className="
+              mt-3 text-sm
+              text-gray-600
+            "
+                        >
+                          {metric.text}
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
     </section>
 
 
