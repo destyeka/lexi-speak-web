@@ -165,12 +165,14 @@ async function persistPracticeResult({
   partLabel,
   partIndex,
   unitIndex,
+  assignmentId,
 }: {
   transcript: string;
   topic: Topic | null;
   partLabel: string;
   partIndex: number;
   unitIndex: number | null;
+  assignmentId?: string | null;
 }) {
   const trimmedTranscript = transcript.trim();
   if (!trimmedTranscript) return;
@@ -211,6 +213,14 @@ async function persistPracticeResult({
         text: metric.text,
       }))
     : [];
+  const analysisPayload = {
+    title: partLabel,
+    overallScore: evaluation.overall,
+    level: evaluation.level,
+    metrics: metricPayload,
+    recommendation: evaluation.recommendation ?? null,
+    analysis: evaluation.analysis ?? null,
+  };
 
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) return;
@@ -234,8 +244,74 @@ async function persistPracticeResult({
       last_part_index: partIndex,
       notes: evaluation.recommendation ?? null,
       metrics: metricPayload,
+      assignment_id: assignmentId ?? null,
+      analysis: analysisPayload,
     }),
   });
+
+  // Also persist metrics into assignment_submissions so coach can view results
+  // immediately. This mirrors the final submit behavior but runs at save-time.
+  if (assignmentId) {
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) return;
+
+      // Use the latest recorded score time if available to avoid timestamp regressions
+      let submittedAt = new Date().toISOString();
+      try {
+        const { data: latestScoreRow, error: scoreError } = await supabase
+          .from("student_score_history")
+          .select("score, recorded_at")
+          .eq("student_id", user.id)
+          .order("recorded_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!scoreError && latestScoreRow?.recorded_at) {
+          submittedAt = latestScoreRow.recorded_at;
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      try {
+        const { error: submissionError } = await supabase
+          .from("assignment_submissions")
+          .upsert([
+            {
+              assignment_id: assignmentId,
+              student_id: user.id,
+              status: "submitted",
+              submitted_at: submittedAt,
+              updated_at: submittedAt,
+              score: latestScore,
+              metrics: metricPayload,
+              analysis: analysisPayload,
+            },
+          ], { onConflict: "assignment_id,student_id" });
+        if (submissionError) throw submissionError;
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        if (msg.includes("column \"score\" does not exist") || msg.includes("column \"analysis\" does not exist") || msg.includes("42703")) {
+          // Retry without score/metrics/analysis fields for older DB schema
+          await supabase
+            .from("assignment_submissions")
+            .upsert([
+              {
+                assignment_id: assignmentId,
+                student_id: user.id,
+                status: "submitted",
+                submitted_at: submittedAt,
+                updated_at: submittedAt,
+              },
+            ], { onConflict: "assignment_id,student_id" });
+        } else {
+          console.error(err);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
 }
 
 export default function LexaPracticeSession() {
@@ -446,20 +522,25 @@ export default function LexaPracticeSession() {
   const finishSession = () => {
     setIsListening(false);
     setIsRecording(false);
-    
+
     const remainingText = liveTranscript.trim() || interimTranscript.trim();
 
+    // Helper to append remaining text to a transcript state safely
+    const appendIfMissing = (current: string, setter: (v: string) => void, extra: string) => {
+      const final = (current + (extra ? ` ${extra}` : "")).trim();
+      if (extra && !current.includes(extra)) setter(final);
+      return final;
+    };
+
     if (page === PAGES.PART3_SESSION) {
-      const finalTranscript = (transcriptPart3 + (remainingText ? ` ${remainingText}` : "")).trim();
-      if (remainingText && !transcriptPart3.includes(remainingText)) {
-        setTranscriptPart3(finalTranscript);
+      const finalTranscript = appendIfMissing(transcriptPart3, setTranscriptPart3, remainingText);
+      // For assignments, save progress per-part then show result; for normal learn, go to result
+      if (isAssignment) {
+        void saveAssignmentProgress();
       }
       setPage(PAGES.PART3_RESULT);
     } else if (page === PAGES.PART2_SESSION) {
-      const finalTranscript = (transcriptPart2 + (remainingText ? ` ${remainingText}` : "")).trim();
-      if (remainingText && !transcriptPart2.includes(remainingText)) {
-        setTranscriptPart2(finalTranscript);
-      }
+      const finalTranscript = appendIfMissing(transcriptPart2, setTranscriptPart2, remainingText);
       if (mode === "test") {
         void persistPracticeResult({
           transcript: finalTranscript,
@@ -467,16 +548,19 @@ export default function LexaPracticeSession() {
           partLabel: "Part 2",
           partIndex: 2,
           unitIndex: resolvedUnitIndex,
+          assignmentId: assignmentId,
         });
         setPage(PAGES.PART3_INTRO);
+      } else if (isAssignment) {
+        // In assignment mode, save progress and advance to Part 3 if available
+        void saveAssignmentProgress();
+        if (part3Topic) setPage(PAGES.PART3_INTRO);
+        else setPage(PAGES.PART2_RESULT);
       } else {
         setPage(PAGES.PART2_RESULT);
       }
     } else {
-      const finalTranscript = (transcriptPart1 + (remainingText ? ` ${remainingText}` : "")).trim();
-      if (remainingText && !transcriptPart1.includes(remainingText)) {
-        setTranscriptPart1(finalTranscript);
-      }
+      const finalTranscript = appendIfMissing(transcriptPart1, setTranscriptPart1, remainingText);
       if (mode === "test") {
         void persistPracticeResult({
           transcript: finalTranscript,
@@ -484,12 +568,19 @@ export default function LexaPracticeSession() {
           partLabel: "Part 1",
           partIndex: 1,
           unitIndex: resolvedUnitIndex,
+          assignmentId: assignmentId,
         });
         setPage(PAGES.PART2_INTRO);
+      } else if (isAssignment) {
+        // In assignment mode, save progress and advance to Part 2 if available
+        void saveAssignmentProgress();
+        if (part2Topic) setPage(PAGES.PART2_INTRO);
+        else setPage(PAGES.RESULT);
       } else {
         setPage(PAGES.RESULT);
       }
     }
+
     setLiveTranscript("");
     setInterimTranscript("");
   };
@@ -563,6 +654,7 @@ export default function LexaPracticeSession() {
         partLabel: `Part ${currentAssignmentPart}`,
         partIndex: currentAssignmentPart,
         unitIndex: resolvedUnitIndex,
+        assignmentId: assignmentId,
       });
       setAssignmentActionStatus("saved");
     } catch (error) {
@@ -582,21 +674,61 @@ export default function LexaPracticeSession() {
       if (userError || !user) {
         throw new Error("Silakan login ulang untuk submit assignment.");
       }
-      const now = new Date().toISOString();
-      const { error: submissionError } = await supabase
-        .from("assignment_submissions")
-        .upsert(
-          {
-            assignment_id: assignmentId,
-            student_id: user.id,
-            status: "submitted",
-            submitted_at: now,
-            updated_at: now,
-          },
-          { onConflict: ["assignment_id", "student_id"] }
-        );
-      if (submissionError) {
-        throw submissionError;
+      // Ensure the submission timestamp is not earlier than the recorded score time.
+      let submittedAt = new Date().toISOString();
+      try {
+        const { data: latestScoreRow, error: scoreError } = await supabase
+          .from("student_score_history")
+          .select("score, recorded_at, metrics")
+          .eq("student_id", user.id)
+          .order("recorded_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!scoreError && latestScoreRow?.recorded_at) {
+          submittedAt = latestScoreRow.recorded_at;
+        }
+        var submissionScore = latestScoreRow?.score ?? null;
+        var submissionMetrics = latestScoreRow?.metrics ?? null;
+      } catch (e) {
+        // ignore and fallback to now
+      }
+
+      // Try upserting submission including score/metrics. If the DB schema
+      // doesn't have those columns (column not found), retry without them.
+      try {
+        const { error: submissionError } = await supabase
+          .from("assignment_submissions")
+          .upsert([
+            {
+              assignment_id: assignmentId,
+              student_id: user.id,
+              status: "submitted",
+              submitted_at: submittedAt,
+              updated_at: submittedAt,
+              score: submissionScore,
+              metrics: submissionMetrics,
+            },
+          ], { onConflict: "assignment_id,student_id" });
+        if (submissionError) throw submissionError;
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        if (msg.includes("column \"score\" does not exist") || msg.includes("42703")) {
+          // Retry without score/metrics fields for older DB schema
+          const { error: submissionError2 } = await supabase
+            .from("assignment_submissions")
+            .upsert([
+              {
+                assignment_id: assignmentId,
+                student_id: user.id,
+                status: "submitted",
+                submitted_at: submittedAt,
+                updated_at: submittedAt,
+              },
+            ], { onConflict: "assignment_id,student_id" });
+          if (submissionError2) throw submissionError2;
+        } else {
+          throw err;
+        }
       }
       setAssignmentActionStatus("submitted");
 

@@ -46,6 +46,9 @@ export default function UnitForm({
 
   const [isActive, setIsActive] = useState(true);
 
+  const [saveNotice, setSaveNotice] = useState("");
+  const [existingCategoryCode, setExistingCategoryCode] = useState("");
+
   const [customCategories, setCustomCategories] =
     useState<
       {
@@ -152,11 +155,8 @@ export default function UnitForm({
           .eq("id", unitId)
           .single();
 
-        if (
-          sessionError ||
-          !sessionData
-        ) {
-          console.error(sessionError);
+        if (sessionError || !sessionData) {
+          console.error("Error loading session:", sessionError);
           return;
         }
 
@@ -173,40 +173,28 @@ export default function UnitForm({
           sessionData.description || ""
         );
 
-        setSessionType(
-          sessionData.type
-        );
+        setSessionType(sessionData.type ?? "practice");
 
-        setCategory(
-          sessionData.category
-        );
+        setCategory(sessionData.category ?? "");
+        setExistingCategoryCode(sessionData.category_code ?? "");
 
-        setAccessLevel(
-          sessionData.access_level
-        );
+        setAccessLevel(sessionData.access_level ?? "premium");
 
-        setIsPublic(
-          sessionData.is_public ?? true
-        );
+        setPrice(sessionData.price ? String(sessionData.price) : "");
 
-        setPrice(
-          sessionData.price
-            ? String(sessionData.price)
-            : ""
-        );
-
-        setIsActive(
-          sessionData.is_active
-        );
+        setIsActive(!!sessionData.is_active);
 
         // 🔥 2. LOAD TOPICS
-        const {
-          data: topicsData,
-        } = await supabase
+        const { data: topicsData, error: topicsError } = await supabase
           .from("topics")
           .select("*")
           .eq("unit_id", unitId)
           .order("part");
+
+        if (topicsError) {
+          console.error("Error loading topics:", topicsError);
+          return;
+        }
 
         if (!topicsData) return;
 
@@ -233,25 +221,23 @@ export default function UnitForm({
         // 🔥 3. LOAD DETAILS
         for (const topic of topicsData) {
 
-          const {
-            data: detailsData,
-          } = await supabase
+          const { data: detailsData, error: detailsError } = await supabase
             .from("topic_details")
             .select("*")
             .eq("topic_id", topic.id)
             .order("order_index");
 
-          partsData[topic.part] = {
+          if (detailsError) {
+            console.error("Error loading topic details for", topic.id, detailsError);
+          }
 
+          const partIndex = topic.part || 1;
+
+          partsData[partIndex] = {
             topicId: topic.id,
-
             title: topic.title || "",
-
-            prompt:
-              topic.prompt || "",
-
-            details:
-              detailsData || [],
+            prompt: topic.prompt || "",
+            details: detailsData || [],
           };
         }
 
@@ -333,7 +319,7 @@ export default function UnitForm({
 
   const handleSave = async () => {
     try {
-
+      setSaveNotice("");
       setIsSaving(true);
 
       const {
@@ -412,11 +398,16 @@ export default function UnitForm({
 
       // 🔥 Still invalid
       if (!categoryCode) {
+        if (mode === "edit" && existingCategoryCode) {
+          categoryCode = existingCategoryCode;
+        }
+      }
 
-        alert("Invalid category");
-
+      if (!categoryCode) {
+        const errorMessage = "Invalid category";
+        alert(errorMessage);
+        setSaveNotice(errorMessage);
         setIsSaving(false);
-
         return;
       }
 
@@ -432,7 +423,6 @@ export default function UnitForm({
       let sessionData: any = null;
 
       if (mode === "create") {
-
         const {
           data,
           error,
@@ -440,93 +430,58 @@ export default function UnitForm({
           .from("session_units")
           .insert({
             session_code: sessionCode,
-
             seq,
-
-            category_code:
-              categoryCode,
-
+            category_code: categoryCode,
             title: sessionTitle,
-
-            description:
-              sessionDescription,
-
+            description: sessionDescription,
             type: sessionType,
-
             created_by: user.id,
-
-            access_level:
-              accessLevel,
-
-            price:
-              accessLevel === "premium"
-                ? Number(price)
-                : null,
-
+            access_level: accessLevel,
+            price: accessLevel === "premium" ? Number(price) : null,
             is_active: isActive,
-
             is_public: isPublic,
-
             category,
           })
           .select()
           .single();
 
         if (error) {
-
+          const errorMessage = error.message || "Failed to save unit.";
           console.log(error);
-
+          alert(errorMessage);
+          setSaveNotice(errorMessage);
           setIsSaving(false);
-
           return;
         }
 
         sessionData = data;
-
       } else {
-
         const {
           data,
           error,
         } = await supabase
           .from("session_units")
           .update({
-
             title: sessionTitle,
-
-            description:
-              sessionDescription,
-
+            description: sessionDescription,
             type: sessionType,
-
-            access_level:
-              accessLevel,
-
-            price:
-              accessLevel === "premium"
-                ? Number(price)
-                : null,
-
+            access_level: accessLevel,
+            price: accessLevel === "premium" ? Number(price) : null,
             is_active: isActive,
-
             is_public: isPublic,
-
             category,
-
-            category_code:
-              categoryCode,
-
+            category_code: categoryCode,
           })
           .eq("id", unitId)
           .select()
           .single();
 
         if (error) {
-
+          const errorMessage = error.message || "Failed to update unit.";
           console.log(error);
-
+          alert(errorMessage);
+          setSaveNotice(errorMessage);
           setIsSaving(false);
-
           return;
         }
 
@@ -571,16 +526,20 @@ export default function UnitForm({
                 partData.prompt,
 
               part,
+
+              is_public: isPublic,
+
+              created_by: user.id,
             })
             .select()
             .single();
 
           if (error) {
-
+            const errorMessage = error.message || "Failed to save question topic.";
             console.error(error);
-
+            alert(errorMessage);
+            setSaveNotice(errorMessage);
             setIsSaving(false);
-
             return;
           }
 
@@ -608,6 +567,8 @@ export default function UnitForm({
               prompt:
                 partData.prompt,
 
+              is_public: isPublic,
+
             })
             .eq(
               "id",
@@ -617,11 +578,11 @@ export default function UnitForm({
             .single();
 
           if (error) {
-
+            const errorMessage = error.message || "Failed to update question topic.";
             console.error(error);
-
+            alert(errorMessage);
+            setSaveNotice(errorMessage);
             setIsSaving(false);
-
             return;
           }
 
@@ -673,9 +634,10 @@ export default function UnitForm({
             );
 
           if (detailError) {
-            console.error(
-              detailError
-            );
+            const errorMessage = detailError.message || "Failed to save question details.";
+            console.error(detailError);
+            alert(errorMessage);
+            setSaveNotice(errorMessage);
           }
         }
       }
@@ -685,9 +647,10 @@ export default function UnitForm({
       router.push("/dashboard/admin/question-bank");
 
     } catch (err) {
-
+      const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred while saving.";
       console.error("SAVE ERROR:", err);
-
+      alert(errorMessage);
+      setSaveNotice(errorMessage);
       setIsSaving(false);
     }
   };
@@ -952,8 +915,15 @@ export default function UnitForm({
           </div>
 
           {/* ACTIONS */}
+          {saveNotice ? (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {saveNotice}
+            </div>
+          ) : null}
+
           <div className="w-full flex gap-3">
             <TextButton
+              type="button"
               className="flex-1"
               variant="secondary"
               onClick={() =>
@@ -966,6 +936,7 @@ export default function UnitForm({
             </TextButton>
 
             <TextButton
+              type="button"
               className="flex-1"
               variant="primary"
               onClick={handleSave}

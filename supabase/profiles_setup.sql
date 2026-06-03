@@ -868,17 +868,64 @@ create table if not exists public.topics (
   created_at timestamptz default now()
 );
 
+-- Add columns if they don't exist (for existing topics tables)
+alter table public.topics
+  add column if not exists created_by uuid references public.profiles(id) on delete cascade;
+
+alter table public.topics
+  add column if not exists is_public boolean not null default false;
+
+alter table public.topics
+  add column if not exists topic_code text;
+
+-- Add additional topic columns expected by the application
+alter table public.topics
+  add column if not exists unit_id uuid references public.session_units(id) on delete set null;
+
+alter table public.topics
+  add column if not exists session text;
+
+alter table public.topics
+  add column if not exists category text;
+
+alter table public.topics
+  add column if not exists category_code text;
+
+create index if not exists idx_topics_unit_id on public.topics(unit_id);
+create index if not exists idx_topics_session on public.topics(session);
+create index if not exists idx_topics_category_code on public.topics(category_code);
+
+-- Set created_by for existing topics (assume admin created them)
+update public.topics
+set created_by = (
+  select id from public.profiles 
+  where role = 'admin' 
+  limit 1
+)
+where created_by is null;
+
 create table if not exists public.topic_details (
   id uuid primary key default gen_random_uuid(),
   topic_id uuid references public.topics(id) on delete cascade,
   type text not null check (type in ('question','bullet')),
   content text not null,
+  prompt text,
+  rubric text,
   order_index int default 0,
   created_at timestamptz default now()
 );
 
 create index if not exists idx_topics_part on public.topics(part);
 create index if not exists idx_topic_details_topic_id on public.topic_details(topic_id);
+create index if not exists idx_topics_created_by on public.topics(created_by);
+create index if not exists idx_topics_is_public on public.topics(is_public);
+
+-- Add columns to topic_details if they don't exist
+alter table public.topic_details
+  add column if not exists prompt text;
+
+alter table public.topic_details
+  add column if not exists rubric text;
 
 -- [TAMBAHAN BARU] Membuat tabel session_units agar RLS tidak error
 create table if not exists public.session_units (
@@ -886,83 +933,436 @@ create table if not exists public.session_units (
   title text not null,
   description text,
   order_index int default 0,
+  session_code text,
   is_active boolean default true,
+  is_public boolean not null default false,
   created_at timestamptz not null default now()
 );
 
 alter table public.session_units enable row level security;
 
+-- Allow reading public banks or banks created by user
 drop policy if exists "Allow read session_units" on public.session_units;
 create policy "Allow read session_units"
 on public.session_units
 for select
 to authenticated
-using (true);
+using (
+  is_public = true
+  or created_by = auth.uid()
+  or public.is_guru()
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
 
-drop policy if exists "Admin manage session_units" on public.session_units;
-create policy "Admin manage session_units"
+-- Allow coaches and admins to create session_units
+drop policy if exists "Coach and admin create session_units" on public.session_units;
+create policy "Coach and admin create session_units"
 on public.session_units
-for all
+for insert
+to authenticated
+with check (
+  (
+    created_by = auth.uid()
+    and exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role in ('admin', 'guru')
+    )
+  )
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
+
+-- Allow creator or admin to update session_units
+drop policy if exists "Coach and admin update session_units" on public.session_units;
+create policy "Coach and admin update session_units"
+on public.session_units
+for update
+to authenticated
+using (
+  created_by = auth.uid()
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+)
+with check (
+  created_by = auth.uid()
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
+
+-- Only admin can delete session_units
+drop policy if exists "Admin delete session_units" on public.session_units;
+create policy "Admin delete session_units"
+on public.session_units
+for delete
 to authenticated
 using (
   exists (
     select 1 from public.profiles p
-    where p.id = auth.uid()
-    and p.role = 'admin'
-  )
-)
-with check (
-  exists (
-    select 1 from public.profiles p
-    where p.id = auth.uid()
-    and p.role = 'admin'
+    where p.id = auth.uid() and p.role = 'admin'
   )
 );
+
+-- Ensure session_code column exists and is indexed for lookups
+alter table public.session_units
+  add column if not exists session_code text;
+
+create unique index if not exists session_units_session_code_idx on public.session_units(session_code);
+
+-- Add additional columns used by the frontend and server logic
+alter table public.session_units
+  add column if not exists seq int default 0;
+
+alter table public.session_units
+  add column if not exists type text;
+
+alter table public.session_units
+  add column if not exists category text;
+
+alter table public.session_units
+  add column if not exists category_code text;
+
+alter table public.session_units
+  add column if not exists created_by uuid references public.profiles(id) on delete set null;
+
+alter table public.session_units
+  add column if not exists access_level text not null default 'free';
+
+alter table public.session_units
+  add column if not exists price numeric;
+
+alter table public.session_units
+  add column if not exists is_public boolean not null default false;
+
+create index if not exists idx_session_units_seq on public.session_units(seq);
+create index if not exists idx_session_units_type on public.session_units(type);
+create index if not exists idx_session_units_category_code on public.session_units(category_code);
+create index if not exists idx_session_units_is_public on public.session_units(is_public);
 
 alter table public.topics enable row level security;
 alter table public.topic_details enable row level security;
 
+-- Updated RLS Policies for topics to support created_by and is_public
 drop policy if exists "Allow read topics" on public.topics;
 create policy "Allow read topics"
 on public.topics
 for select
 to authenticated
-using (is_active = true);
+using (
+  is_public = true
+  or created_by = auth.uid()
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
 
+-- Admin and creator can insert topics
+drop policy if exists "Admin manage topics" on public.topics;
+create policy "Admin manage topics"
+on public.topics
+for insert
+to authenticated
+with check (
+  created_by = auth.uid()
+  and exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role in ('admin', 'guru', 'coach')
+  )
+);
+
+-- Creator and admin can update
+drop policy if exists "Admin update topics" on public.topics;
+create policy "Admin update topics"
+on public.topics
+for update
+to authenticated
+using (
+  created_by = auth.uid()
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+)
+with check (
+  created_by = auth.uid()
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
+
+-- Only admin can delete topics
+drop policy if exists "Admin delete topics" on public.topics;
+create policy "Admin delete topics"
+on public.topics
+for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
+
+-- Updated RLS for topic_details
 drop policy if exists "Allow read topic_details" on public.topic_details;
 create policy "Allow read topic_details"
 on public.topic_details
 for select
 to authenticated
-using (true);
-
--- topics insert/update/delete
-drop policy if exists "Admin manage topics" on public.topics;
-create policy "Admin manage topics"
-on public.topics
-for all
-to authenticated
 using (
+  -- Can read if topic is public
   exists (
+    select 1 from public.topics t
+    where t.id = topic_id and t.is_public = true
+  )
+  -- Or if they created the topic
+  or exists (
+    select 1 from public.topics t
+    where t.id = topic_id and t.created_by = auth.uid()
+  )
+  -- Or if they're admin
+  or exists (
     select 1 from public.profiles p
-    where p.id = auth.uid()
-    and p.role = 'admin'
+    where p.id = auth.uid() and p.role = 'admin'
   )
 );
 
--- topic_details insert/update/delete
+-- Creator and admin can insert topic details
 drop policy if exists "Admin manage topic_details" on public.topic_details;
 create policy "Admin manage topic_details"
 on public.topic_details
-for all
+for insert
+to authenticated
+with check (
+  exists (
+    select 1 from public.topics t
+    where t.id = topic_id
+    and (
+      t.created_by = auth.uid()
+      or exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid() and p.role = 'admin'
+      )
+    )
+  )
+);
+
+-- Creator and admin can update topic details
+drop policy if exists "Admin update topic_details" on public.topic_details;
+create policy "Admin update topic_details"
+on public.topic_details
+for update
+to authenticated
+using (
+  exists (
+    select 1 from public.topics t
+    where t.id = topic_id
+    and (
+      t.created_by = auth.uid()
+      or exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid() and p.role = 'admin'
+      )
+    )
+  )
+)
+with check (
+  exists (
+    select 1 from public.topics t
+    where t.id = topic_id
+    and (
+      t.created_by = auth.uid()
+      or exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid() and p.role = 'admin'
+      )
+    )
+  )
+);
+
+-- Only admin can delete topic details
+drop policy if exists "Admin delete topic_details" on public.topic_details;
+create policy "Admin delete topic_details"
+on public.topic_details
+for delete
 to authenticated
 using (
   exists (
     select 1 from public.profiles p
-    where p.id = auth.uid()
-    and p.role = 'admin'
+    where p.id = auth.uid() and p.role = 'admin'
   )
 );
+
+-- 4c) Question Public Requests Table [NEW - CENTRALIZED QUESTION BANK]
+create table if not exists public.question_public_requests (
+  id uuid primary key default gen_random_uuid(),
+  topic_id uuid not null references public.topics(id) on delete cascade,
+  requested_by uuid not null references public.profiles(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz,
+  resolved_by uuid references public.profiles(id) on delete set null
+);
+
+-- Create indexes for question_public_requests
+create index if not exists idx_question_public_requests_topic on public.question_public_requests(topic_id);
+create index if not exists idx_question_public_requests_status on public.question_public_requests(status);
+create index if not exists idx_question_public_requests_requested_by on public.question_public_requests(requested_by);
+create index if not exists idx_question_public_requests_created_at on public.question_public_requests(created_at desc);
+
+-- Enable RLS on question_public_requests
+alter table public.question_public_requests enable row level security;
+
+-- RLS Policies for question_public_requests
+drop policy if exists "question_public_requests_select" on public.question_public_requests;
+drop policy if exists "question_public_requests_insert" on public.question_public_requests;
+drop policy if exists "question_public_requests_update" on public.question_public_requests;
+drop policy if exists "question_public_requests_delete" on public.question_public_requests;
+
+-- Coaches and admins can view all pending requests for their topics
+create policy "question_public_requests_select"
+on public.question_public_requests for select
+to authenticated
+using (
+  -- Admin can see all
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+  -- Coaches can see requests for their own topics
+  or exists (
+    select 1 from public.topics t
+    where t.id = topic_id
+    and t.created_by = auth.uid()
+  )
+  -- Coaches can see their own requests
+  or requested_by = auth.uid()
+);
+
+-- Coaches can insert requests
+create policy "question_public_requests_insert"
+on public.question_public_requests for insert
+to authenticated
+with check (
+  requested_by = auth.uid()
+  and exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role in ('guru', 'coach')
+  )
+  -- Prevent duplicate requests from same coach
+  and not exists (
+    select 1 from public.question_public_requests qpr
+    where qpr.topic_id = topic_id
+    and qpr.requested_by = auth.uid()
+    and qpr.status in ('pending', 'approved')
+  )
+);
+
+-- Only admin can update (approve/reject)
+create policy "question_public_requests_update"
+on public.question_public_requests for update
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+)
+with check (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
+
+-- Only admin can delete
+create policy "question_public_requests_delete"
+on public.question_public_requests for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
+
+-- Helper function to approve public request
+create or replace function public.approve_public_question_request(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_topic_id uuid;
+begin
+  -- Only admin can approve
+  if not exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  ) then
+    raise exception 'Only admin can approve public requests';
+  end if;
+
+  -- Get topic_id from request
+  select topic_id into v_topic_id
+  from public.question_public_requests
+  where id = p_request_id;
+
+  if v_topic_id is null then
+    raise exception 'Request not found';
+  end if;
+
+  -- Update request status and resolved_at
+  update public.question_public_requests
+  set
+    status = 'approved',
+    resolved_at = now(),
+    resolved_by = auth.uid()
+  where id = p_request_id;
+
+  -- Update topic to is_public = true
+  update public.topics
+  set is_public = true
+  where id = v_topic_id;
+end;
+$$;
+
+-- Helper function to reject public request
+create or replace function public.reject_public_question_request(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Only admin can reject
+  if not exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  ) then
+    raise exception 'Only admin can reject public requests';
+  end if;
+
+  -- Update request status
+  update public.question_public_requests
+  set
+    status = 'rejected',
+    resolved_at = now(),
+    resolved_by = auth.uid()
+  where id = p_request_id;
+end;
+$$;
 
 -- 5a) Assignment tables [NEW]
 create table if not exists public.assignments (
@@ -990,6 +1390,8 @@ alter table public.assignments
 create table if not exists public.assignment_questions (
   id uuid primary key default gen_random_uuid(),
   assignment_id uuid not null references public.assignments(id) on delete cascade,
+  topic_id uuid not null references public.topics(id) on delete cascade,
+  part int not null default 1,
   content text not null,
   prompt text default '',
   type text not null default 'question' check (type in ('question', 'bullet')),
@@ -1004,17 +1406,24 @@ create table if not exists public.assignment_submissions (
   status text not null default 'pending' check (status in ('pending','in_progress','submitted')),
   started_at timestamptz,
   submitted_at timestamptz,
+  score numeric,
+  metrics jsonb not null default '[]'::jsonb,
+  analysis jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now(),
   primary key (assignment_id, student_id)
 );
 
 -- Alter statements for assignment_questions table
 alter table public.assignment_questions
+  add column if not exists part int not null default 1;
+alter table public.assignment_questions
   add column if not exists prompt text default '';
 alter table public.assignment_questions
   add column if not exists type text not null default 'question' check (type in ('question', 'bullet'));
 alter table public.assignment_questions
   add column if not exists rubric text;
+alter table public.assignment_questions
+  add column if not exists topic_id uuid references public.topics(id) on delete cascade;
 
 -- Indexes for assignments
 create index if not exists assignments_class_id_idx on public.assignments(class_id);
@@ -1028,6 +1437,17 @@ create index if not exists assignment_questions_order_index_idx on public.assign
 -- Indexes for assignment_submissions
 create index if not exists assignment_submissions_student_id_idx on public.assignment_submissions(student_id);
 create index if not exists assignment_submissions_status_idx on public.assignment_submissions(status);
+-- Ensure columns exist when table was created earlier without them
+alter table public.assignment_submissions
+  add column if not exists score numeric;
+
+alter table public.assignment_submissions
+  add column if not exists metrics jsonb not null default '[]'::jsonb;
+
+alter table public.assignment_submissions
+  add column if not exists analysis jsonb not null default '{}'::jsonb;
+
+create index if not exists assignment_submissions_score_idx on public.assignment_submissions(score);
 
 -- RLS for assignments
 alter table public.assignments enable row level security;

@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import type { ApexOptions } from "apexcharts";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
+import { generateSessionCode } from "@/lib/generateSessionCode";
 import { InputField } from "@/components/ui/system/InputField";
 import TextButton from "@/components/ui/system/TextButton";
 import { Toggle } from "@/components/ui/system/Toggle";
@@ -38,12 +40,38 @@ interface Question {
   rubric?: string;
 }
 
+interface QuestionBankDetail {
+  type: "question" | "bullet";
+  content: string;
+  prompt?: string;
+  rubric?: string;
+  order_index: number;
+}
+
+interface QuestionBankGroup {
+  topic_code: string;
+  title: string;
+  is_public: boolean;
+  created_by: string | null;
+  created_at: string | null;
+  parts: Array<{
+    id: string;
+    part: number;
+    title: string;
+    prompt?: string | null;
+    details: QuestionBankDetail[];
+  }>;
+}
+
 interface StudentStatus {
   student_id: string;
   email: string;
   status: string;
   submitted_at: string | null;
   latest_score: number | null;
+  metrics?: any[];
+  analysis?: any;
+  notes?: string | null;
 }
 
 interface ClassMemberSummary {
@@ -63,6 +91,9 @@ interface SubmissionRow {
   student_id: string;
   assignment_id: string;
   submitted_at: string | null;
+  score?: number | null;
+  metrics?: any;
+  analysis?: any;
 }
 
 const formatBand = (value: number | null | undefined) => {
@@ -99,6 +130,8 @@ export default function ClassAssignmentsPage() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedAssignmentForStatus, setSelectedAssignmentForStatus] = useState<Assignment | null>(null);
   const [studentStatuses, setStudentStatuses] = useState<StudentStatus[]>([]);
+  const [selectedSummaryStatus, setSelectedSummaryStatus] = useState<StudentStatus | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [classMembers, setClassMembers] = useState<ClassMemberSummary[]>([]);
   const [scoreHistoryRows, setScoreHistoryRows] = useState<ScoreHistoryRow[]>([]);
   const [submissionRows, setSubmissionRows] = useState<SubmissionRow[]>([]);
@@ -108,7 +141,6 @@ export default function ClassAssignmentsPage() {
   const [selectedReportStudentId, setSelectedReportStudentId] = useState<string>("");
   const [currentTime] = useState(() => Date.now());
 
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editAssignment, setEditAssignment] = useState<Assignment | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -121,15 +153,64 @@ export default function ClassAssignmentsPage() {
   const [editActive, setEditActive] = useState(true);
   const [editQuestions, setEditQuestions] = useState<Question[]>([]);
 
-  const [newTitle, setNewTitle] = useState("");
-  const [newDescription, setNewDescription] = useState("");
-  const [newPart, setNewPart] = useState(1);
-  const [newStartAt, setNewStartAt] = useState("");
-  const [newStartTime, setNewStartTime] = useState("00:00");
-  const [newDueAt, setNewDueAt] = useState("");
-  const [newDueTime, setNewDueTime] = useState("23:59");
-  const [newActive, setNewActive] = useState(true);
-  const [newQuestions, setNewQuestions] = useState<Question[]>([]);
+  const [isAssignmentFlowOpen, setIsAssignmentFlowOpen] = useState(false);
+  const [assignmentFlowStep, setAssignmentFlowStep] = useState<"chooseSource" | "selectBank" | "schedule" | "createBank">("chooseSource");
+  const [questionBanks, setQuestionBanks] = useState<QuestionBankGroup[]>([]);
+  const [selectedBank, setSelectedBank] = useState<QuestionBankGroup | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isLoadingBanks, setIsLoadingBanks] = useState(false);
+  const [bankRequestMessage, setBankRequestMessage] = useState<string | null>(null);
+  const [bankSearchTerm, setBankSearchTerm] = useState("");
+
+  const [scheduleStartAt, setScheduleStartAt] = useState("");
+  const [scheduleStartTime, setScheduleStartTime] = useState("00:00");
+  const [scheduleDueAt, setScheduleDueAt] = useState("");
+  const [scheduleDueTime, setScheduleDueTime] = useState("23:59");
+
+  const [createBankName, setCreateBankName] = useState("");
+  const [createBankDescription, setCreateBankDescription] = useState("");
+  const [createBankActive, setCreateBankActive] = useState(true);
+  const [createBankCategory, setCreateBankCategory] = useState("education");
+  const [createBankParts, setCreateBankParts] = useState<
+    Array<{
+      part: number;
+      title: string;
+      prompt: string;
+      details: QuestionBankDetail[];
+    }>
+  >([
+    {
+      part: 1,
+      title: "",
+      prompt: "",
+      details: [
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 1 },
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 2 },
+      ],
+    },
+    {
+      part: 2,
+      title: "",
+      prompt: "",
+      details: [
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+        { type: "bullet", content: "", order_index: 1 },
+        { type: "bullet", content: "", order_index: 2 },
+        { type: "bullet", content: "", order_index: 3 },
+      ],
+    },
+    {
+      part: 3,
+      title: "",
+      prompt: "",
+      details: [
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 1 },
+        { type: "question", content: "", prompt: "", rubric: "", order_index: 2 },
+      ],
+    },
+  ]);
 
   function formatLocalDate(date: Date) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -141,16 +222,8 @@ export default function ClassAssignmentsPage() {
     return new Date(year, month - 1, day);
   }
 
-  const handleNewDueAtChange = useCallback(([selected]: Date[]) => {
-    setNewDueAt(selected ? formatLocalDate(selected) : "");
-  }, []);
-
   const handleEditDueAtChange = useCallback(([selected]: Date[]) => {
     setEditDueAt(selected ? formatLocalDate(selected) : "");
-  }, []);
-
-  const handleNewStartAtChange = useCallback(([selected]: Date[]) => {
-    setNewStartAt(selected ? formatLocalDate(selected) : "");
   }, []);
 
   const handleEditStartAtChange = useCallback(([selected]: Date[]) => {
@@ -195,16 +268,451 @@ export default function ClassAssignmentsPage() {
     }));
   };
 
-  const questionLabel = (part: number, question: Question, index: number) => {
-    if (part === 2 && index === 0) {
-      return "Cue card title";
+  const loadQuestionBanks = useCallback(async () => {
+    setIsLoadingBanks(true);
+    setBankRequestMessage(null);
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setBankRequestMessage("Silakan login ulang untuk memuat question bank.");
+      setIsLoadingBanks(false);
+      return;
     }
 
-    if (question.type === "bullet") {
-      return `Bullet point ${index}`;
+    // Query dari session_units dulu, dengan filter public atau created by user
+    const selectStatement = `
+      id,
+      session_code,
+      title,
+      description,
+      is_public,
+      created_by,
+      created_at,
+      topics(
+        id,
+        unit_id,
+        topic_code,
+        part,
+        title,
+        prompt,
+        is_active,
+        created_at,
+        created_by,
+        topic_details(id, type, content, prompt, rubric, order_index)
+      )
+    `;
+
+    const { data: unitsData, error: unitsError } = await supabase
+      .from("session_units")
+      .select(selectStatement)
+      .order("created_at", { ascending: false });
+
+    if (unitsError) {
+      console.error("Error fetching question banks:", unitsError);
+      setBankRequestMessage(unitsError.message || "Gagal memuat question bank.");
+      setIsLoadingBanks(false);
+      return;
     }
 
-    return `Question ${index + 1}`;
+    type UnitRow = {
+      id: string;
+      session_code: string | null;
+      title: string;
+      description: string | null;
+      is_public: boolean;
+      created_by: string | null;
+      created_at: string | null;
+      topics: Array<{
+        id: string;
+        unit_id: string | null;
+        topic_code: string | null;
+        part: number;
+        title: string;
+        prompt: string | null;
+        is_active: boolean;
+        created_at: string | null;
+        created_by: string | null;
+        topic_details: Array<{
+          id: string;
+          type: "question" | "bullet" | string;
+          content: string;
+          prompt: string | null;
+          rubric: string | null;
+          order_index: number;
+        }> | null;
+      }> | null;
+    };
+
+    const units = ((unitsData as UnitRow[] | null) ?? []);
+
+    setCurrentUserId(user.id);
+
+    const bankMap = new Map<string, QuestionBankGroup>();
+    units.forEach((unit) => {
+      const code = unit.session_code || unit.id;
+      const topics = unit.topics ?? [];
+
+      const parts = topics
+        .sort((a, b) => a.part - b.part)
+        .map((topic) => {
+          const detailRows = (topic.topic_details ?? []).map((detail) => ({
+            type: detail.type as "question" | "bullet",
+            content: detail.content,
+            prompt: detail.prompt ?? undefined,
+            rubric: detail.rubric ?? undefined,
+            order_index: detail.order_index,
+          }));
+
+          return {
+            id: topic.id,
+            part: topic.part,
+            title: topic.title,
+            prompt: topic.prompt,
+            details: detailRows.sort((a, b) => a.order_index - b.order_index),
+          };
+        });
+
+      bankMap.set(code, {
+        topic_code: code,
+        title: unit.title || `Bank ${code}`,
+        is_public: unit.is_public,
+        created_by: unit.created_by,
+        created_at: unit.created_at,
+        parts,
+      });
+    });
+
+    const banks = Array.from(bankMap.values());
+    setQuestionBanks(banks);
+    setIsLoadingBanks(false);
+  }, []);
+
+  const handleOpenScheduleForBank = (bank: QuestionBankGroup) => {
+    setSelectedBank(bank);
+    setBankRequestMessage(null);
+    setScheduleStartAt("");
+    setScheduleStartTime("00:00");
+    setScheduleDueAt("");
+    setScheduleDueTime("23:59");
+    setAssignmentFlowStep("schedule");
+  };
+
+  const handleCreateBank = async () => {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      alert("Silakan login ulang untuk membuat question bank.");
+      return;
+    }
+
+    if (!createBankName.trim()) {
+      alert("Nama question bank harus diisi.");
+      return;
+    }
+
+    const sessionType = "practice";
+
+    const systemCategoryMap: Record<string, string> = {
+      music: "MUS",
+      identity: "IDN",
+      education: "EDU",
+      culinary: "CUL",
+      travel: "TRV",
+      art: "ART",
+      sports: "SPT",
+      technology: "TEC",
+      health: "HLT",
+      business: "BUS",
+    };
+
+    const category = createBankCategory || "education";
+    let categoryCode = systemCategoryMap[category] || null;
+    if (!categoryCode) {
+      categoryCode = category.trim().toUpperCase().slice(0, 3) || "EDU";
+    }
+
+    const { sessionCode, seq } = await generateSessionCode({
+      session: sessionType,
+      category,
+      categoryCode,
+    });
+
+    const bankTitle = createBankName.trim();
+
+    const {
+      data: sessionData,
+      error: sessionError,
+    } = await supabase
+      .from("session_units")
+      .insert({
+        session_code: sessionCode,
+        seq,
+        category,
+        category_code: categoryCode,
+        type: sessionType,
+        title: bankTitle,
+        description: createBankDescription || bankTitle,
+        access_level: "free",
+        is_active: createBankActive,
+        is_public: false,
+        created_by: user.id,
+      })
+      .select()
+      .single();
+
+    if (sessionError || !sessionData) {
+      console.error("Error creating shared session unit:", sessionError);
+      alert(sessionError?.message || "Gagal membuat question bank.");
+      return;
+    }
+
+    const topicInsertRows = createBankParts.map((part) => ({
+      unit_id: sessionData.id,
+      topic_code: sessionData.session_code,
+      category,
+      category_code: categoryCode,
+      session: sessionType,
+      part: part.part,
+      title: part.title || `${bankTitle} Part ${part.part}`,
+      prompt: part.prompt || "",
+      is_active: createBankActive,
+      created_by: user.id,
+      is_public: false,
+    }));
+
+    const { data: insertedTopics, error: topicError } = await supabase
+      .from("topics")
+      .insert(topicInsertRows)
+      .select("id, part");
+
+    if (topicError || !insertedTopics) {
+      console.error("Error creating question bank topics:", topicError);
+      alert(topicError?.message || "Gagal membuat question bank.");
+      return;
+    }
+
+    const topicMap = new Map<number, string>();
+    (insertedTopics as { id: string; part: number }[]).forEach((topic) => {
+      topicMap.set(topic.part, topic.id);
+    });
+
+    const detailRows = createBankParts.flatMap((part) =>
+      part.details.map((detail) => ({
+        topic_id: topicMap.get(part.part),
+        type: detail.type,
+        content: detail.content,
+        rubric: detail.rubric,
+        prompt: detail.prompt,
+        order_index: detail.order_index,
+      }))
+    );
+
+    const { error: detailError } = await supabase.from("topic_details").insert(detailRows);
+    if (detailError) {
+      console.error("Error saving question bank details:", detailError);
+      alert(detailError.message || "Gagal menyimpan detail question bank.");
+      return;
+    }
+
+    // Create local bank data for immediate display
+    const selectedBankData = {
+      topic_code: sessionData.session_code,
+      title: bankTitle,
+      is_public: false,
+      created_by: user.id,
+      created_at: sessionData.created_at || new Date().toISOString(),
+      parts: createBankParts.map((part) => ({
+        id: topicMap.get(part.part) ?? "",
+        part: part.part,
+        title: part.title || `${bankTitle} Part ${part.part}`,
+        prompt: part.prompt,
+        details: part.details,
+      })),
+    };
+
+    // Set the created bank as selected bank
+    setSelectedBank(selectedBankData);
+
+    // Reload all banks from database to ensure it appears in the list
+    await loadQuestionBanks();
+
+    // Reset the create bank form
+    setCreateBankName("");
+    setCreateBankDescription("");
+    setCreateBankActive(true);
+    setCreateBankParts([
+      {
+        part: 1,
+        title: "",
+        prompt: "",
+        details: [
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 1 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 2 },
+        ],
+      },
+      {
+        part: 2,
+        title: "",
+        prompt: "",
+        details: [
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+          { type: "bullet", content: "", prompt: "", rubric: "", order_index: 1 },
+          { type: "bullet", content: "", prompt: "", rubric: "", order_index: 2 },
+          { type: "bullet", content: "", prompt: "", rubric: "", order_index: 3 },
+        ],
+      },
+      {
+        part: 3,
+        title: "",
+        prompt: "",
+        details: [
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 1 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 2 },
+        ],
+      },
+    ]);
+
+    // Move to schedule step (bank is ready to use for assignment)
+    setAssignmentFlowStep("schedule");
+  };
+
+  const handleCreateAssignmentFromBank = async () => {
+    if (!selectedBank) return;
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      alert("Silakan login ulang untuk membuat assignment.");
+      return;
+    }
+
+    const startAtValue = dateTimeToIso(scheduleStartAt, scheduleStartTime);
+    const dueAtValue = dateTimeToIso(scheduleDueAt, scheduleDueTime);
+    const validationError = validateAssignmentDates(startAtValue, dueAtValue);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("assignments")
+      .insert({
+        class_id: classId,
+        coach_id: user.id,
+        part: 1,
+        title: selectedBank.title,
+        description: selectedBank.title,
+        start_at: startAtValue,
+        due_at: dueAtValue,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (error || !data) {
+      alert(error?.message || "Failed to create assignment.");
+      return;
+    }
+
+    const questionRows = selectedBank.parts.flatMap((part) =>
+      part.details.map((detail) => ({
+        assignment_id: data.id,
+        topic_id: part.id,
+        part: part.part,
+        content: detail.content,
+        prompt: detail.type === "question" ? detail.prompt ?? "" : "",
+        type: detail.type,
+        order_index: detail.order_index,
+        rubric: detail.type === "question" ? detail.rubric ?? "" : "",
+      }))
+    );
+
+    const { error: questionError } = await supabase.from("assignment_questions").insert(questionRows);
+    if (questionError) {
+      console.error("Error saving assignment questions:", questionError);
+      alert(`Failed to save assignment questions: ${questionError.message}`);
+      return;
+    }
+
+    setIsAssignmentFlowOpen(false);
+    setAssignmentFlowStep("chooseSource");
+    setSelectedBank(null);
+    setScheduleStartAt("");
+    setScheduleStartTime("00:00");
+    setScheduleDueAt("");
+    setScheduleDueTime("23:59");
+    await fetchAssignments();
+  };
+
+  const bankHasAllParts = (bank: QuestionBankGroup) => {
+    const parts = new Set(bank.parts.map((part) => part.part));
+    return parts.has(1) && parts.has(2) && parts.has(3);
+  };
+
+  const clearCreateBankForm = () => {
+    setCreateBankName("");
+    setCreateBankDescription("");
+    setCreateBankActive(true);
+    setCreateBankParts([
+      {
+        part: 1,
+        title: "",
+        prompt: "",
+        details: [
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 1 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 2 },
+        ],
+      },
+      {
+        part: 2,
+        title: "",
+        prompt: "",
+        details: [
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+          { type: "bullet", content: "", prompt: "", rubric: "", order_index: 1 },
+          { type: "bullet", content: "", prompt: "", rubric: "", order_index: 2 },
+          { type: "bullet", content: "", prompt: "", rubric: "", order_index: 3 },
+        ],
+      },
+      {
+        part: 3,
+        title: "",
+        prompt: "",
+        details: [
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 0 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 1 },
+          { type: "question", content: "", prompt: "", rubric: "", order_index: 2 },
+        ],
+      },
+    ]);
+  };
+
+  const openAssignmentFlow = async () => {
+    setIsAssignmentFlowOpen(true);
+    setAssignmentFlowStep("chooseSource");
+    await loadQuestionBanks();
+  };
+
+  const closeAssignmentFlow = () => {
+    setIsAssignmentFlowOpen(false);
+    setAssignmentFlowStep("chooseSource");
+    setSelectedBank(null);
+    setBankSearchTerm("");
+    setBankRequestMessage(null);
+    clearCreateBankForm();
   };
 
   const fetchClassInfo = useCallback(async () => {
@@ -313,10 +821,10 @@ export default function ClassAssignmentsPage() {
 
     const { data: submissions, error: submissionsError } = await supabase
       .from("assignment_submissions")
-      .select("student_id, assignment_id, submitted_at")
+      .select("student_id, assignment_id, submitted_at, score, metrics")
       .in("assignment_id", assignmentIds)
       .in("student_id", studentIds)
-      .eq("status", "submitted");
+      .in("status", ["submitted", "complete"]);
 
     if (submissionsError) {
       setReportNotice(submissionsError.message);
@@ -327,7 +835,8 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
-    setSubmissionRows((submissions as SubmissionRow[] | null) ?? []);
+    const submissionList = (submissions ?? []) as SubmissionRow[];
+    setSubmissionRows(submissionList);
 
     const { data: history, error: historyError } = await supabase
       .from("student_score_history")
@@ -344,7 +853,8 @@ export default function ClassAssignmentsPage() {
     }
 
     const scoreHistoryByStudent = new Map<string, ScoreHistoryRow[]>();
-    ((history as ScoreHistoryRow[] | null) ?? []).forEach((row) => {
+    const historyRows = (history as ScoreHistoryRow[] | null) ?? [];
+    historyRows.forEach((row: ScoreHistoryRow) => {
       if (!scoreHistoryByStudent.has(row.student_id)) {
         scoreHistoryByStudent.set(row.student_id, []);
       }
@@ -353,10 +863,10 @@ export default function ClassAssignmentsPage() {
 
     const getScoreForSubmission = (studentId: string, submittedAt: string | null) => {
       if (!submittedAt) return null;
-      const rows = scoreHistoryByStudent.get(studentId) ?? [];
+      const rows = scoreHistoryByStudent.get(studentId) ?? ([] as ScoreHistoryRow[]);
       let latestRow: ScoreHistoryRow | null = null;
       const submittedTime = new Date(submittedAt).getTime();
-      rows.forEach((row) => {
+      rows.forEach((row: ScoreHistoryRow) => {
         const recordedTime = new Date(row.recorded_at).getTime();
         if (recordedTime <= submittedTime) {
           if (!latestRow || recordedTime > new Date(latestRow.recorded_at).getTime()) {
@@ -364,11 +874,20 @@ export default function ClassAssignmentsPage() {
           }
         }
       });
-      return latestRow ? Number(latestRow.score) : null;
+      return latestRow ? Number((latestRow as ScoreHistoryRow).score) : null;
     };
 
-    const submissionScoreRows: ScoreHistoryRow[] = ((submissions as SubmissionRow[] | null) ?? [])
-      .map((submission) => {
+    const submissionScoreRows: ScoreHistoryRow[] = submissionList
+      .map((submission: SubmissionRow) => {
+        // Prefer explicit score stored on the submission; fallback to history lookup
+        const explicitScore = (submission as SubmissionRow & { score?: number }).score;
+        if (explicitScore !== undefined && explicitScore !== null) {
+          return {
+            student_id: submission.student_id,
+            score: Number(explicitScore),
+            recorded_at: submission.submitted_at || new Date().toISOString(),
+          };
+        }
         const score = getScoreForSubmission(submission.student_id, submission.submitted_at);
         if (score === null) return null;
         return {
@@ -473,15 +992,6 @@ export default function ClassAssignmentsPage() {
   }, [scoreHistoryRows, selectedReportStudentId]);
 
   const classReportSeries = useMemo(() => {
-    if (selectedReportStudentId) {
-      const data = reportRows.map((row) => ({ x: row.recorded_at, y: Number(row.score) }));
-      return {
-        categories: [],
-        dailyCounts: [],
-        series: [{ name: "Student score", data }],
-      };
-    }
-
     const scoreByDate = new Map<string, { total: number; count: number }>();
 
     reportRows.forEach((row) => {
@@ -523,10 +1033,12 @@ export default function ClassAssignmentsPage() {
       }
     }
 
+    const seriesName = selectedReportStudentId ? "Student score" : "Class average";
+
     return {
       categories,
       dailyCounts,
-      series: [{ name: "Class average", data: averageData }],
+      series: [{ name: seriesName, data: averageData }],
     };
   }, [reportRows, selectedReportStudentId]);
 
@@ -539,15 +1051,10 @@ export default function ClassAssignmentsPage() {
     stroke: { curve: "smooth", width: 3 },
     markers: { size: 0 },
     dataLabels: { enabled: false },
-    xaxis: selectedReportStudentId
-      ? {
-          type: "datetime",
-          labels: { style: { colors: "#6b7280", fontSize: "12px" } },
-        }
-      : {
-          categories: classReportSeries.categories,
-          labels: { style: { colors: "#6b7280", fontSize: "12px" } },
-        },
+    xaxis: {
+      categories: classReportSeries.categories,
+      labels: { style: { colors: "#6b7280", fontSize: "12px" } },
+    },
     yaxis: selectedReportStudentId
       ? {
           min: 0,
@@ -567,7 +1074,8 @@ export default function ClassAssignmentsPage() {
       theme: "light",
       x: { format: "dd MMM" },
       y: {
-        formatter: (value, { dataPointIndex }) => {
+        formatter: (value: any, options: any) => {
+          const dataPointIndex = options?.dataPointIndex;
           const attempts = classReportSeries.dailyCounts?.[dataPointIndex];
           const averageValue = `${Math.round(Number(value) * 10) / 10}`;
           return attempts !== undefined
@@ -643,89 +1151,8 @@ export default function ClassAssignmentsPage() {
     };
   }, [assignments.length, classMembers, reportRows, selectedReportStudent, selectedReportStudentId, submissionRows]);
 
-  const handleCreateAssignment = async () => {
-    if (!newTitle.trim()) {
-      alert("Title is required.");
-      return;
-    }
-
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (!user || userError) {
-      alert("Please sign in again.");
-      return;
-    }
-
-    const startAtValue = dateTimeToIso(newStartAt, newStartTime);
-    const dueAtValue = dateTimeToIso(newDueAt, newDueTime);
-
-    const validationError = validateAssignmentDates(startAtValue, dueAtValue);
-    if (validationError) {
-      alert(validationError);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("assignments")
-      .insert({
-        class_id: classId,
-        coach_id: user.id,
-        part: newPart,
-        title: newTitle,
-        description: newDescription || null,
-        start_at: startAtValue,
-        due_at: dueAtValue,
-        is_active: newActive,
-      })
-      .select()
-      .single();
-
-    if (error || !data) {
-      alert(error?.message || "Failed to create assignment.");
-      return;
-    }
-
-    if (newQuestions.length > 0) {
-      const questionRows = newQuestions.map((q, index) => {
-        const row: Record<string, unknown> = {
-          assignment_id: data.id,
-          content: q.content,
-          order_index: index,
-          type: q.type ?? "question",
-          rubric: q.rubric ?? "",
-        };
-        if (q.prompt != null) {
-          row.prompt = q.prompt;
-        }
-        return row;
-      });
-
-      const { error: questionError } = await supabase.from("assignment_questions").insert(questionRows);
-
-      if (questionError) {
-        console.error("Error saving assignment questions:", questionError);
-        alert(`Failed to save questions: ${questionError.message}`);
-        return;
-      }
-    }
-
-    setNewTitle("");
-    setNewDescription("");
-    setNewStartAt("");
-    setNewStartTime("00:00");
-    setNewDueAt("");
-    setNewDueTime("23:59");
-    setNewActive(true);
-    setNewQuestions([]);
-    setIsCreateOpen(false);
-    await fetchAssignments();
-  };
-
   const handleSaveEdit = async () => {
     if (!editAssignment) return;
-    if (!editTitle.trim()) {
-      alert("Title is required.");
-      return;
-    }
 
     const startAtValue = dateTimeToIso(editStartAt, editStartTime);
     const dueAtValue = dateTimeToIso(editDueAt, editDueTime);
@@ -739,12 +1166,8 @@ export default function ClassAssignmentsPage() {
     const { error } = await supabase
       .from("assignments")
       .update({
-        title: editTitle,
-        part: editPart,
-        description: editDescription || null,
         start_at: startAtValue,
         due_at: dueAtValue,
-        is_active: editActive,
       })
       .eq("id", editAssignment.id);
 
@@ -753,41 +1176,56 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
-    const { error: deleteError } = await supabase.from("assignment_questions").delete().eq("assignment_id", editAssignment.id);
-    if (deleteError) {
-      console.error("Error deleting old questions:", deleteError);
-      alert(`Failed to update questions: ${deleteError.message}`);
-      return;
-    }
-
-    if (editQuestions.length > 0) {
-      const questionRows = editQuestions.map((q, index) => {
-        const row: Record<string, unknown> = {
-          assignment_id: editAssignment.id,
-          content: q.content,
-          order_index: index,
-          type: q.type ?? "question",
-          rubric: q.rubric ?? "",
-        };
-        if (q.prompt != null) {
-          row.prompt = q.prompt;
-        }
-        return row;
-      });
-
-      const { error: questionError } = await supabase.from("assignment_questions").insert(questionRows);
-
-      if (questionError) {
-        console.error("Error updating assignment questions:", questionError);
-        alert(`Failed to save updated questions: ${questionError.message}`);
-        return;
-      }
-    }
-
     setEditAssignment(null);
     setIsEditOpen(false);
     setEditQuestions([]);
     await fetchAssignments();
+  };
+
+  const handleDeleteAssignment = async () => {
+    if (!editAssignment) return;
+    const confirmed = confirm(
+      "Are you sure you want to delete this assignment? This will remove the assignment and all related student submissions."
+    );
+    if (!confirmed) return;
+
+    const assignmentId = editAssignment.id;
+
+    const { error: deleteQuestionsError } = await supabase
+      .from("assignment_questions")
+      .delete()
+      .eq("assignment_id", assignmentId);
+    if (deleteQuestionsError) {
+      console.error("Error deleting assignment questions:", deleteQuestionsError);
+      alert(`Failed to delete assignment questions: ${deleteQuestionsError.message}`);
+      return;
+    }
+
+    const { error: deleteSubmissionsError } = await supabase
+      .from("assignment_submissions")
+      .delete()
+      .eq("assignment_id", assignmentId);
+    if (deleteSubmissionsError) {
+      console.error("Error deleting assignment submissions:", deleteSubmissionsError);
+      alert(`Failed to delete assignment submissions: ${deleteSubmissionsError.message}`);
+      return;
+    }
+
+    const { error: deleteAssignmentError } = await supabase
+      .from("assignments")
+      .delete()
+      .eq("id", assignmentId);
+    if (deleteAssignmentError) {
+      console.error("Error deleting assignment:", deleteAssignmentError);
+      alert(`Failed to delete assignment: ${deleteAssignmentError.message}`);
+      return;
+    }
+
+    setEditAssignment(null);
+    setEditQuestions([]);
+    setIsEditOpen(false);
+    await fetchAssignments();
+    await fetchClassReportData();
   };
 
   const handleOpenEdit = async (assignment: Assignment) => {
@@ -850,7 +1288,13 @@ export default function ClassAssignmentsPage() {
     }
 
     // Fetch student profiles and submissions
-    const studentIds = members.map(m => m.student_id);
+    const studentIds = members.map((m) => m.student_id).filter(Boolean) as string[];
+    if (studentIds.length === 0) {
+      console.warn("No students found for class", classId);
+      setStudentStatuses([]);
+      return;
+    }
+
     const { data: profiles, error: profilesError } = await supabase
       .from("profiles")
       .select("id, email")
@@ -862,14 +1306,36 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
-    const { data: submissions, error: submissionsError } = await supabase
-      .from("assignment_submissions")
-      .select("student_id, status, submitted_at")
-      .eq("assignment_id", assignment.id)
-      .in("student_id", studentIds);
+    const fetchSubmissions = async (selectExpr: string) =>
+      supabase
+        .from("assignment_submissions")
+        .select(selectExpr)
+        .eq("assignment_id", assignment.id)
+        .in("student_id", studentIds);
+
+    let submissions: any[] | null = null;
+    let submissionsError: any = null;
+
+    ({ data: submissions, error: submissionsError } = await fetchSubmissions(
+      "student_id, status, submitted_at, score, metrics, analysis"
+    ));
 
     if (submissionsError) {
-      console.error("Error fetching submissions:", submissionsError);
+      console.error("Error fetching submissions:", submissionsError, {
+        message: submissionsError?.message,
+        code: submissionsError?.code,
+      });
+
+      const fallbackMessage = String(submissionsError?.message || "").toLowerCase();
+      if (fallbackMessage.includes("analysis") || fallbackMessage.includes("column \"analysis\"") || fallbackMessage.includes("42703")) {
+        const fallbackResult = await fetchSubmissions("student_id, status, submitted_at, score, metrics");
+        submissions = fallbackResult.data as any[] | null;
+        submissionsError = fallbackResult.error;
+      }
+    }
+
+    if (submissionsError) {
+      console.error("Error fetching submissions after fallback:", submissionsError);
       setStudentStatuses([]);
       return;
     }
@@ -884,6 +1350,15 @@ export default function ClassAssignmentsPage() {
       console.error("Error fetching score history:", scoreError);
     }
 
+    const { data: progressRows, error: progressError } = await supabase
+      .from("student_progress")
+      .select("student_id, notes")
+      .in("student_id", studentIds);
+
+    if (progressError) {
+      console.error("Error fetching student progress notes:", progressError);
+    }
+
     const historyByStudent = new Map<string, ScoreHistoryRow[]>();
     (scoreRows as ScoreHistoryRow[] | null ?? []).forEach((row) => {
       if (!historyByStudent.has(row.student_id)) {
@@ -892,28 +1367,57 @@ export default function ClassAssignmentsPage() {
       historyByStudent.get(row.student_id)?.push(row);
     });
 
+    const notesByStudent = new Map<string, string>();
+    (progressRows as { student_id: string; notes: string | null }[] | null ?? []).forEach((row) => {
+      if (row.notes) {
+        notesByStudent.set(row.student_id, row.notes);
+      }
+    });
+
     const getScoreForSubmission = (studentId: string, submittedAt: string | null) => {
       const rows = historyByStudent.get(studentId) ?? [];
+      if (rows.length === 0) return null;
       if (!submittedAt) {
-        return rows.length > 0 ? Number(rows[0].score) : null;
+        return Number(rows[0].score);
       }
+
       const submittedTime = new Date(submittedAt).getTime();
-      const matchingRow = rows.find((row) => new Date(row.recorded_at).getTime() <= submittedTime);
-      return matchingRow ? Number(matchingRow.score) : null;
+      const earlierScore = rows.find((row) => new Date(row.recorded_at).getTime() <= submittedTime);
+      if (earlierScore) {
+        return Number(earlierScore.score);
+      }
+
+      // If there is no earlier score row, use the closest later score row instead.
+      const laterScore = rows.slice().reverse().find((row) => new Date(row.recorded_at).getTime() >= submittedTime);
+      return laterScore ? Number(laterScore.score) : null;
     };
 
     const statuses: StudentStatus[] = profiles.map((profile) => {
       const submission = submissions?.find((s) => s.student_id === profile.id);
+      const explicitScore = submission && submission.score !== undefined && submission.score !== null ? Number(submission.score) : null;
       return {
         student_id: profile.id,
         email: profile.email || "Unknown",
         status: submission ? submission.status : "Not Started",
         submitted_at: submission?.submitted_at || null,
-        latest_score: getScoreForSubmission(profile.id, submission?.submitted_at || null),
+        latest_score: explicitScore !== null ? explicitScore : getScoreForSubmission(profile.id, submission?.submitted_at || null),
+        metrics: submission?.metrics ?? [],
+        analysis: submission?.analysis ?? null,
+        notes: notesByStudent.get(profile.id) ?? null,
       };
     });
 
     setStudentStatuses(statuses);
+  };
+
+  const openSummaryModal = (student: StudentStatus) => {
+    setSelectedSummaryStatus(student);
+    setShowSummaryModal(true);
+  };
+
+  const closeSummaryModal = () => {
+    setSelectedSummaryStatus(null);
+    setShowSummaryModal(false);
   };
 
   const formatDate = (value: string | null) => {
@@ -926,7 +1430,7 @@ export default function ClassAssignmentsPage() {
       <div className="max-w-6xl mx-auto">
         <div className="mb-8 rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
           <h1 className="text-xl font-semibold text-gray-800 dark:text-white/90">Assignments for {className || "Class"}</h1>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Create manual assignments for your students. Questions are stored separately from the admin question bank.</p>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Manage assignments for your students and track progress from question banks.</p>
           {classDescription ? <p className="mt-2 text-sm text-gray-500">{classDescription}</p> : null}
           {notice ? <p className="mt-3 text-sm text-error-600">{notice}</p> : null}
         </div>
@@ -1061,17 +1565,15 @@ export default function ClassAssignmentsPage() {
             <p className="text-xs uppercase tracking-wide text-gray-500">Total assignments</p>
             <p className="mt-2 text-2xl font-bold text-gray-800 dark:text-white/90">{assignments.length}</p>
           </div>
-          <TextButton
-            variant="primary"
-            onClick={() => {
-              setNewPart(1);
-              setNewQuestions(buildQuestionsForPart(1));
-              setIsCreateOpen(true);
-            }}
-            className="flex items-center gap-2"
-          >
-            <PlusIcon weight="bold" size={18} /> New Assignment
-          </TextButton>
+          <div className="flex flex-wrap gap-3">
+            <TextButton
+              variant="primary"
+              onClick={() => openAssignmentFlow()}
+              className="flex items-center gap-2"
+            >
+              <PlusIcon weight="bold" size={18} /> Create Assignment
+            </TextButton>
+          </div>
         </div>
 
         <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
@@ -1080,7 +1582,6 @@ export default function ClassAssignmentsPage() {
               <thead>
                 <tr className="border-b border-gray-100 dark:border-gray-800">
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Title</th>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Part</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Start</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Due</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Status</th>
@@ -1104,7 +1605,6 @@ export default function ClassAssignmentsPage() {
                     return (
                       <tr key={assignment.id} className="border-b last:border-0 hover:bg-gray-50 dark:hover:bg-white/5">
                         <td className="px-5 py-4 text-sm font-medium">{assignment.title}</td>
-                        <td className="px-5 py-4 text-sm">Part {assignment.part}</td>
                         <td className="px-5 py-4 text-sm">{formatDate(assignment.start_at)}</td>
                         <td className="px-5 py-4 text-sm">{formatDate(assignment.due_at)}</td>
                         <td className="px-5 py-4 text-sm">
@@ -1145,7 +1645,8 @@ export default function ClassAssignmentsPage() {
 
         {showDetailModal && selectedAssignment && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-            <div className="w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-3xl bg-white shadow-2xl flex flex-col">
+              {/* Header */}
               <div className="border-b border-gray-200 p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1161,30 +1662,35 @@ export default function ClassAssignmentsPage() {
                   </button>
                 </div>
               </div>
-              <div className="space-y-6 p-6">
-                {/* assignment-level prompt removed; prompts are per-question now */}
+
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {selectedAssignment.description ? (
                   <p className="text-sm text-gray-600">{selectedAssignment.description}</p>
                 ) : null}
-                {/* assignment-level metrics removed; use per-question rubric instead */}
-                <div className="space-y-3">
+
+                <div className="space-y-4">
                   <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">Questions</h3>
                   {selectedQuestions.length === 0 ? (
                     <p className="text-sm text-gray-500">No questions added yet.</p>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="grid gap-4">
                       {selectedQuestions.map((question, idx) => (
                         <div key={question.id} className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                          <p className="text-sm font-semibold text-gray-900">
+                          <p className="text-sm font-semibold text-primary">
                             {question.type === "bullet" ? `Bullet ${idx + 1}` : `Question ${idx + 1}`}
                           </p>
-                          <p className="mt-2 text-sm text-gray-600">{question.content}</p>
+                          <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{question.content}</p>
+                          {question.prompt ? (
+                            <div className="mt-3 rounded-lg bg-blue-50 border border-blue-200 p-3">
+                              <p className="text-xs font-medium text-blue-900 mb-1">Prompt:</p>
+                              <p className="text-sm text-blue-800 whitespace-pre-wrap">{question.prompt}</p>
+                            </div>
+                          ) : null}
                           {question.rubric ? (
-                            <div className="mt-4 space-y-3">
-                              <div className="rounded-2xl border border-gray-200 bg-white p-3">
-                                <p className="text-sm font-semibold text-gray-900">Rubric</p>
-                                <p className="text-sm text-gray-600 mt-2">{question.rubric}</p>
-                              </div>
+                            <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3">
+                              <p className="text-xs font-medium text-amber-900 mb-1">Rubric:</p>
+                              <p className="text-sm text-amber-800 whitespace-pre-wrap">{question.rubric}</p>
                             </div>
                           ) : null}
                         </div>
@@ -1193,6 +1699,8 @@ export default function ClassAssignmentsPage() {
                   )}
                 </div>
               </div>
+
+              {/* Footer */}
               <div className="border-t border-gray-200 p-6 text-right">
                 <TextButton variant="secondary" onClick={() => setShowDetailModal(false)}>
                   Close
@@ -1202,419 +1710,480 @@ export default function ClassAssignmentsPage() {
           </div>
         )}
 
-        {isCreateOpen && (
+
+        {isAssignmentFlowOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
-            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold mb-4 text-primary">Create Assignment</h3>
-              <div className="grid gap-6 lg:grid-cols-[1fr_1.7fr] flex-1 min-h-0">
-                <div className="space-y-4 overflow-y-auto pr-2">
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Part
-                    <div className="w-full mt-2 border border-gray-300 rounded-lg overflow-hidden">
-                      <select
-                        value={newPart}
-                        onChange={(event) => {
-                          const selected = Number(event.target.value);
-                          setNewPart(selected);
-                          setNewQuestions(buildQuestionsForPart(selected));
-                        }}
-                        className="w-full p-2 outline-none bg-white"
-                      >
-                        <option value={1}>Part 1</option>
-                        <option value={2}>Part 2</option>
-                        <option value={3}>Part 3</option>
-                      </select>
-                    </div>
-                  </label>
-
-                  <label className="w-full block text-base font-bold text-primary">
-                    Title
-                    <InputField
-                      className="flex-1 min-w-0 mt-2 my-3"
-                      value={newTitle}
-                      onChange={setNewTitle}
-                      placeholder="Enter assignment title"
-                    />
-                  </label>
-
-                  <label className="w-full block text-base font-bold text-primary">
-                    Description
-                    <TextArea
-                      className="flex-1 min-w-0 mt-2 my-3"
-                      value={newDescription}
-                      onChange={(value) => setNewDescription(value)}
-                      placeholder="Optional description"
-                      rows={4}
-                    />
-                  </label>
-
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="text-sm font-medium">Activate assignment</span>
-                    <Toggle checked={newActive} onChange={setNewActive} />
-                  </div>
-
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Start Date
-                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
-                      <DatePicker
-                        id="create-assignment-start-date"
-                        defaultDate={newStartAt ? toLocalDate(newStartAt) : undefined}
-                        onChange={handleNewStartAtChange}
-                        placeholder="Select start date"
-                        position="auto"
-                      />
-                    </div>
-                  </label>
-
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Start Time
-                    <input
-                      type="time"
-                      value={newStartTime}
-                      onChange={(e) => setNewStartTime(e.target.value)}
-                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
-                    />
-                  </label>
-
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Due Date
-                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
-                      <DatePicker
-                        id="create-assignment-due-date"
-                        defaultDate={newDueAt ? toLocalDate(newDueAt) : undefined}
-                        onChange={handleNewDueAtChange}
-                        placeholder="Select due date"
-                        position="auto"
-                      />
-                    </div>
-                  </label>
-
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Due Time
-                    <input
-                      type="time"
-                      value={newDueTime}
-                      onChange={(e) => setNewDueTime(e.target.value)}
-                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
-                    />
-                  </label>
+            <div className="w-full max-w-[96vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-primary">Create Assignment from Question Bank</h3>
+                  <p className="mt-1 text-sm text-gray-500">Choose an existing bank or create a new bank, then schedule the assignment.</p>
                 </div>
+                <button type="button" onClick={closeAssignmentFlow} className="text-gray-500 hover:text-gray-900">
+                  Close
+                </button>
+              </div>
 
-                <div className="max-h-[calc(100vh-12rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                  <div className="mb-4 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">Questions</p>
-                      <p className="text-xs text-gray-500">Edit the list on the right side.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setNewQuestions((prev) => [...prev, { id: crypto.randomUUID(), type: "question", content: "", prompt: "", order_index: prev.length, rubric: "" }])}
-                      className="text-primary text-sm"
-                    >
-                      Add Question
-                    </button>
-                  </div>
+              {assignmentFlowStep === "chooseSource" && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentFlowStep("selectBank")}
+                    className="rounded-3xl border border-gray-200 bg-gray-50 p-6 text-left transition hover:bg-gray-100"
+                  >
+                    <p className="text-sm font-semibold text-gray-900">Select existing bank</p>
+                    <p className="mt-2 text-sm text-gray-500">Pick a public bank or one you created to build a new assignment.</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentFlowStep("createBank")}
+                    className="rounded-3xl border border-gray-200 bg-gray-50 p-6 text-left transition hover:bg-gray-100"
+                  >
+                    <p className="text-sm font-semibold text-gray-900">Create your own bank</p>
+                    <p className="mt-2 text-sm text-gray-500">Add a bank for the whole assignment with parts 1, 2, and 3.</p>
+                  </button>
+                </div>
+              )}
 
-                  <div className="space-y-3">
-                    {newQuestions.map((question, index) => (
-                      <div key={question.id} className="rounded-2xl border border-gray-200 bg-white p-3">
-                        <div className="flex items-start gap-3">
-                          <div className="text-sm font-medium text-gray-600 w-24">
-                            {questionLabel(newPart, question, index)}
-                          </div>
-                          <div className="mx-auto p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl flex items-center">
+              {assignmentFlowStep === "selectBank" && (
+                <div className="space-y-4">
+                  <div className="rounded-3xl border border-gray-200 bg-white p-6">
+                    <h3 className="mb-6 text-lg font-semibold text-gray-900">Select Question Bank</h3>
+
+                    {isLoadingBanks ? (
+                      <p className="text-sm text-gray-500">Loading banks...</p>
+                    ) : (
+                      <div className="space-y-4">
+                        <label className="block text-sm font-semibold text-gray-700">
+                          Question Bank
+                          <div className="mt-2 rounded-xl border border-gray-300 p-2">
                             <select
-                              value={question.type ?? "question"}
+                              value={selectedBank?.topic_code ?? ""}
                               onChange={(e) => {
-                                const updated = [...newQuestions];
-                                const nextType = e.target.value as "question" | "bullet";
-                                updated[index] = {
-                                  ...updated[index],
-                                  type: nextType,
-                                };
-                                setNewQuestions(updated);
+                                const code = e.target.value;
+                                const bank = questionBanks.find((b) => b.topic_code === code);
+                                if (bank) {
+                                  setSelectedBank(bank);
+                                }
                               }}
-                              className="bg-transparent outline-none w-full"
+                              className="w-full bg-white p-2 outline-none"
                             >
-                              <option value="question">Question</option>
-                              <option value="bullet">Bullet</option>
+                              <option value="">-- Select a question bank --</option>
+                              {questionBanks.length > 0 && (
+                                <>
+                                  {questionBanks.some((bank) => bank.created_by === currentUserId) && (
+                                    <optgroup label="🧩 My Question Banks">
+                                      {questionBanks
+                                        .filter((bank) => bank.created_by === currentUserId)
+                                        .map((bank) => (
+                                          <option key={bank.topic_code} value={bank.topic_code}>
+                                            {bank.title}
+                                          </option>
+                                        ))}
+                                    </optgroup>
+                                  )}
+                                  {questionBanks.some((bank) => bank.is_public && bank.created_by !== currentUserId) && (
+                                    <optgroup label="📖 Public Question Banks">
+                                      {questionBanks
+                                        .filter((bank) => bank.is_public && bank.created_by !== currentUserId)
+                                        .map((bank) => (
+                                          <option key={bank.topic_code} value={bank.topic_code}>
+                                            {bank.title}
+                                          </option>
+                                        ))}
+                                    </optgroup>
+                                  )}
+                                  {questionBanks.some((bank) => !bank.is_public && bank.created_by !== currentUserId) && (
+                                    <optgroup label="🔒 Private Question Banks from others (Not Available)">
+                                      {questionBanks
+                                        .filter((bank) => !bank.is_public && bank.created_by !== currentUserId)
+                                        .map((bank) => (
+                                          <option key={bank.topic_code} value={bank.topic_code} disabled>
+                                            {bank.title}
+                                          </option>
+                                        ))}
+                                    </optgroup>
+                                  )}
+                                </>
+                              )}
                             </select>
                           </div>
-                          <div className="flex-1">
-                            <InputField
-                              className="w-full"
-                              value={question.content}
-                              onChange={(value) => {
-                                setNewQuestions((prev) => prev.map((item, idx) => idx === index ? { ...item, content: value } : item));
-                              }}
-                              placeholder={
-                                question.type === "bullet"
-                                  ? "Enter bullet point"
-                                  : newPart === 2 && index === 0
-                                  ? "Enter cue card title or topic"
-                                  : "Enter question content"
-                              }
-                            />
+                        </label>
+
+                        {questionBanks.some((bank) => !bank.is_public && bank.created_by !== currentUserId) && (
+                          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                            <p className="text-xs text-amber-800">
+                              <span className="font-semibold">🔒 Private banks not available:</span> Only your own question banks and public banks from others can be selected. Private banks created by other users remain unavailable unless they are made public.
+                            </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setNewQuestions((prev) => prev.filter((_, idx) => idx !== index))}
-                            className="text-red-500"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        {question.type === "question" ? (
-                          <div className="mt-4 space-y-4">
-                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                              <div className="mb-3">
-                                <p className="text-sm font-semibold text-gray-800">Prompt</p>
-                                <p className="text-xs text-gray-500">Enter a prompt for this question.</p>
-                              </div>
-                              <TextArea
-                                className="w-full"
-                                value={question.prompt || ""}
-                                onChange={(value) => {
-                                  setNewQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, prompt: value } : item)));
-                                }}
-                                placeholder="Enter question prompt"
-                                rows={3}
-                              />
-                            </div>
-                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                              <div className="mb-3">
-                                <p className="text-sm font-semibold text-gray-800">Rubric</p>
-                                <p className="text-xs text-gray-500">Enter rubric for this question (paragraph).</p>
-                              </div>
-                              <TextArea
-                                className="w-full"
-                                value={question.rubric || ""}
-                                onChange={(value) => {
-                                  setNewQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, rubric: value } : item)));
-                                }}
-                                placeholder="Enter rubric (paragraph)"
-                                rows={5}
-                              />
-                            </div>
+                        )}
+
+                        {selectedBank && (
+                          <div className="mt-4 rounded-2xl border border-gray-100 bg-slate-50 p-4">
+                            <p className="text-sm font-semibold text-gray-900">{selectedBank.title}</p>
+                            <p className="mt-1 text-xs text-gray-500">Code: {selectedBank.topic_code}</p>
+                            <p className="mt-1 text-xs text-gray-500">
+                              Parts: {selectedBank.parts.map((p) => p.part).join(", ")} •{" "}
+                              {selectedBank.is_public ? "Public" : "Private"}
+                            </p>
                           </div>
+                        )}
+
+                        {bankRequestMessage ? (
+                          <p className="text-sm text-yellow-600">{bankRequestMessage}</p>
                         ) : null}
+                      </div>
+                    )}
+
+                    <div className="mt-6 flex gap-3">
+                      <TextButton variant="secondary" onClick={() => setAssignmentFlowStep("chooseSource")}>
+                        Back
+                      </TextButton>
+                      <TextButton
+                        variant="primary"
+                        onClick={() => {
+                          if (selectedBank && bankHasAllParts(selectedBank)) {
+                            handleOpenScheduleForBank(selectedBank);
+                          }
+                        }}
+                        disabled={!selectedBank || !bankHasAllParts(selectedBank ?? ({} as QuestionBankGroup))}
+                      >
+                        Next
+                      </TextButton>
+                      <TextButton
+                        variant="secondary"
+                        onClick={() => setAssignmentFlowStep("createBank")}
+                      >
+                        Create Bank
+                      </TextButton>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {assignmentFlowStep === "createBank" && (
+                <div className="grid gap-6 xl:grid-cols-[1fr_2fr] overflow-y-auto pb-4">
+                  <div className="rounded-3xl border border-gray-200 bg-white p-6">
+                    <div className="mb-6">
+                      <h3 className="text-xl font-semibold text-gray-900">Create Question Bank</h3>
+                      <p className="mt-2 text-sm text-gray-500">Build a multi-part bank for student assignments.</p>
+                    </div>
+
+                    <label className="block mb-4 text-sm font-semibold text-primary">
+                      Bank Name
+                      <InputField
+                        className="mt-2"
+                        value={createBankName}
+                        onChange={setCreateBankName}
+                        placeholder="Bank title"
+                      />
+                    </label>
+
+                    <label className="block mb-4 text-sm font-semibold text-primary">
+                      Description
+                      <TextArea
+                        className="mt-2"
+                        rows={4}
+                        value={createBankDescription}
+                        onChange={setCreateBankDescription}
+                        placeholder="Optional description"
+                      />
+                    </label>
+
+                    <label className="block mb-4 text-sm font-semibold text-primary">
+                      Category
+                      <div className="mt-2 w-full rounded-2xl p-3 text-primary outline-dashed outline-[var(--primary)]">
+                        <select
+                          value={createBankCategory}
+                          onChange={(e) => setCreateBankCategory(e.target.value)}
+                          className="w-full bg-transparent outline-none"
+                        >
+                          <option value="music">Music</option>
+                          <option value="identity">Identity</option>
+                          <option value="education">Education</option>
+                          <option value="culinary">Culinary</option>
+                          <option value="travel">Travel</option>
+                          <option value="art">Art</option>
+                          <option value="sports">Sports</option>
+                          <option value="technology">Technology</option>
+                          <option value="health">Health</option>
+                          <option value="business">Business</option>
+                        </select>
+                      </div>
+                    </label>
+
+                    <div className="mb-6 flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">Activate bank</span>
+                      <Toggle checked={createBankActive} onChange={setCreateBankActive} />
+                    </div>
+
+                    <div className="flex gap-3">
+                      <TextButton variant="secondary" onClick={() => setAssignmentFlowStep("chooseSource")}>Back</TextButton>
+                      <TextButton variant="primary" onClick={handleCreateBank}>Save Bank</TextButton>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    {createBankParts.map((part, index) => (
+                      <div key={part.part} className="rounded-3xl border border-gray-200 bg-white p-6">
+                        <div className="mb-6">
+                          <p className="mb-2 text-xs uppercase tracking-[0.2em] text-gray-500">{part.part === 1 ? "Introduction" : part.part === 2 ? "Individual Long Turn" : "Two-way Discussion"}</p>
+                          <h2 className="text-xl font-semibold text-gray-900">Part {part.part}</h2>
+                        </div>
+
+                        <label className="block mb-4 text-base font-bold text-primary">
+                          Topic Title
+                          <InputField
+                            className="mt-2"
+                            value={part.title}
+                            onChange={(value) => {
+                              setCreateBankParts((prev) => prev.map((item, idx) => (idx === index ? { ...item, title: value } : item)));
+                            }}
+                            placeholder={`Part ${part.part} title`}
+                          />
+                        </label>
+
+                        <label className="block mb-6 text-base font-bold text-primary">
+                          Prompt
+                          <InputField
+                            multiline
+                            rows={1}
+                            className="mt-2"
+                            value={part.prompt}
+                            onChange={(value) => {
+                              setCreateBankParts((prev) => prev.map((item, idx) => (idx === index ? { ...item, prompt: value } : item)));
+                            }}
+                            placeholder={`Part ${part.part} user prompt`}
+                          />
+                        </label>
+
+                        <div className="space-y-3">
+                          {part.details.map((detail, detailIndex) => (
+                            <div key={detailIndex} className="rounded-2xl border border-gray-200 p-4">
+                              <div className="mb-4 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-sm font-semibold text-gray-500">
+                                    {detailIndex + 1}
+                                  </div>
+                                  <div className="flex rounded-xl h-10 justify-center items-center text-xs font-semibold uppercase bg-gray-100 px-4 text-gray-600">
+                                    {part.part === 2 ? "Bullet" : detail.type === "question" ? "Question" : "Bullet"}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = part.details.filter((_, idx) => idx !== detailIndex);
+                                    setCreateBankParts((prev) =>
+                                      prev.map((item, idx) => (idx === index ? { ...item, details: updated } : item))
+                                    );
+                                  }}
+                                  className="rounded-xl px-3 py-2 text-red-500 hover:bg-red-50"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+
+                              <div className="mb-3">
+                                <p className="mb-2 text-sm font-semibold text-primary">Content</p>
+                                <InputField
+                                  className="mt-2"
+                                  value={detail.content}
+                                  onChange={(value) => {
+                                    setCreateBankParts((prev) =>
+                                      prev.map((item, idx) =>
+                                        idx === index
+                                          ? {
+                                              ...item,
+                                              details: item.details.map((d, di) => (di === detailIndex ? { ...d, content: value } : d)),
+                                            }
+                                          : item
+                                      )
+                                    );
+                                  }}
+                                  placeholder="Content"
+                                />
+                              </div>
+
+                              {detail.type === "question" ? (
+                                <div className="space-y-3">
+                                  <div>
+                                    <p className="mb-2 text-sm font-semibold text-primary">Rubric</p>
+                                    <InputField
+                                      multiline
+                                      rows={5}
+                                      value={detail.rubric ?? ""}
+                                      onChange={(value) => {
+                                        setCreateBankParts((prev) =>
+                                          prev.map((item, idx) =>
+                                            idx === index
+                                              ? {
+                                                  ...item,
+                                                  details: item.details.map((d, di) => (di === detailIndex ? { ...d, rubric: value } : d)),
+                                                }
+                                              : item
+                                          )
+                                        );
+                                      }}
+                                      placeholder="Rubric for AI"
+                                    />
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreateBankParts((prev) =>
+                              prev.map((item, idx) =>
+                                idx === index
+                                  ? {
+                                      ...item,
+                                      details: [
+                                        ...item.details,
+                                        {
+                                          type: part.part === 2 ? "bullet" : "question",
+                                          content: "",
+                                          prompt: "",
+                                          rubric: "",
+                                          order_index: item.details.length,
+                                        },
+                                      ],
+                                    }
+                                  : item
+                              )
+                            );
+                          }}
+                          className="text-primary mt-4"
+                        >
+                          + Add {part.part === 2 ? "Bullet" : "Detail"}
+                        </button>
                       </div>
                     ))}
                   </div>
                 </div>
-              </div>
+              )}
 
-              <div className="mt-4 border-t border-gray-200 pt-4 flex justify-end gap-2">
-                <TextButton variant="secondary" onClick={() => setIsCreateOpen(false)}>
-                  Cancel
-                </TextButton>
-                <TextButton variant="primary" onClick={handleCreateAssignment}>
-                  Create Assignment
-                </TextButton>
-              </div>
+              {assignmentFlowStep === "schedule" && selectedBank && (
+                <div className="space-y-4 overflow-y-auto pb-4">
+                  <div className="rounded-3xl border border-gray-200 bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-gray-900">Bank selected</p>
+                    <p className="mt-2 text-sm text-gray-500">{selectedBank.title} • {selectedBank.parts.length} parts</p>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block text-sm font-semibold text-gray-700">
+                      Start Date
+                      <div className="mt-2 rounded-xl border border-gray-300 p-2">
+                        <DatePicker
+                          id="bank-assignment-start-date"
+                          defaultDate={scheduleStartAt ? toLocalDate(scheduleStartAt) : undefined}
+                          onChange={(dates) => setScheduleStartAt(dates[0] ? formatLocalDate(dates[0]) : "")}
+                          placeholder="Select start date"
+                          position="auto"
+                        />
+                      </div>
+                    </label>
+                    <label className="block text-sm font-semibold text-gray-700">
+                      Start Time
+                      <input
+                        type="time"
+                        value={scheduleStartTime}
+                        onChange={(event) => setScheduleStartTime(event.target.value)}
+                        className="mt-2 w-full rounded-xl border border-gray-300 px-4 py-3"
+                      />
+                    </label>
+                    <label className="block text-sm font-semibold text-gray-700">
+                      Due Date
+                      <div className="mt-2 rounded-xl border border-gray-300 p-2">
+                        <DatePicker
+                          id="bank-assignment-due-date"
+                          defaultDate={scheduleDueAt ? toLocalDate(scheduleDueAt) : undefined}
+                          onChange={(dates) => setScheduleDueAt(dates[0] ? formatLocalDate(dates[0]) : "")}
+                          placeholder="Select due date"
+                          position="auto"
+                        />
+                      </div>
+                    </label>
+                    <label className="block text-sm font-semibold text-gray-700">
+                      Due Time
+                      <input
+                        type="time"
+                        value={scheduleDueTime}
+                        onChange={(event) => setScheduleDueTime(event.target.value)}
+                        className="mt-2 w-full rounded-xl border border-gray-300 px-4 py-3"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <TextButton variant="secondary" onClick={() => setAssignmentFlowStep("selectBank")}>Back</TextButton>
+                    <TextButton variant="primary" onClick={handleCreateAssignmentFromBank}>
+                      Create Assignment from Bank
+                    </TextButton>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {isEditOpen && editAssignment && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
-            <div className="w-full max-w-[90vw] max-h-[calc(100vh-4rem)] overflow-hidden rounded-2xl bg-white p-6 shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold mb-4 text-primary">Edit Assignment</h3>
-              <div className="grid gap-6 lg:grid-cols-[1fr_1.7fr] flex-1 min-h-0">
-                <div className="space-y-4 overflow-y-auto pr-2">
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Part
-                    <div className="w-full mt-2 border border-gray-300 rounded-lg overflow-hidden">
-                      <select
-                        value={editPart}
-                        onChange={(event) => {
-                          const selected = Number(event.target.value);
-                          setEditPart(selected);
-                          setEditQuestions(buildQuestionsForPart(selected));
-                        }}
-                        className="w-full p-2 outline-none bg-white"
-                      >
-                        <option value={1}>Part 1</option>
-                        <option value={2}>Part 2</option>
-                        <option value={3}>Part 3</option>
-                      </select>
-                    </div>
-                  </label>
+            <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white p-6 shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-semibold mb-6 text-primary">Edit Assignment Schedule</h3>
+              <div className="space-y-6 flex-1 overflow-y-auto">
 
-                  <label className="w-full block text-base font-bold text-primary">
-                    Title
-                    <InputField
-                      className="flex-1 min-w-0 mt-2 my-3"
-                      value={editTitle}
-                      onChange={setEditTitle}
-                      placeholder="Enter assignment title"
+                <label className="w-full block text-sm font-semibold text-primary">
+                  Start Date
+                  <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
+                    <DatePicker
+                      id="edit-assignment-start-date"
+                      defaultDate={editStartAt ? toLocalDate(editStartAt) : undefined}
+                      onChange={handleEditStartAtChange}
+                      placeholder="Select start date"
+                      position="auto"
                     />
-                  </label>
-
-                  <label className="w-full block text-base font-bold text-primary">
-                    Description
-                    <TextArea
-                      className="flex-1 min-w-0 mt-2 my-3"
-                      value={editDescription}
-                      onChange={(value) => setEditDescription(value)}
-                      placeholder="Optional description"
-                      rows={4}
-                    />
-                  </label>
-
-                  {/* assignment-level metrics removed; per-question rubric used instead */}
-
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="text-sm font-medium">Activate assignment</span>
-                    <Toggle checked={editActive} onChange={setEditActive} />
                   </div>
+                </label>
 
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Start Date
-                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
-                      <DatePicker
-                        id="edit-assignment-start-date"
-                        defaultDate={editStartAt ? toLocalDate(editStartAt) : undefined}
-                        onChange={handleEditStartAtChange}
-                        placeholder="Select start date"
-                        position="auto"
-                      />
-                    </div>
-                  </label>
+                <label className="w-full block text-sm font-semibold text-primary">
+                  Start Time
+                  <input
+                    type="time"
+                    value={editStartTime}
+                    onChange={(e) => setEditStartTime(e.target.value)}
+                    className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
+                  />
+                </label>
 
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Start Time
-                    <input
-                      type="time"
-                      value={editStartTime}
-                      onChange={(e) => setEditStartTime(e.target.value)}
-                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
+                <label className="w-full block text-sm font-semibold text-primary">
+                  Due Date
+                  <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
+                    <DatePicker
+                      id="edit-assignment-due-date"
+                      defaultDate={editDueAt ? toLocalDate(editDueAt) : undefined}
+                      onChange={handleEditDueAtChange}
+                      placeholder="Select due date"
+                      position="auto"
                     />
-                  </label>
-
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Due Date
-                    <div className="w-full mt-2 border border-gray-300 rounded-lg p-2">
-                      <DatePicker
-                        id="edit-assignment-due-date"
-                        defaultDate={editDueAt ? toLocalDate(editDueAt) : undefined}
-                        onChange={handleEditDueAtChange}
-                        placeholder="Select due date"
-                        position="auto"
-                      />
-                    </div>
-                  </label>
-
-                  <label className="w-full block text-sm font-semibold text-primary">
-                    Due Time
-                    <input
-                      type="time"
-                      value={editDueTime}
-                      onChange={(e) => setEditDueTime(e.target.value)}
-                      className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
-                    />
-                  </label>
-                </div>
-
-                <div className="max-h-[calc(100vh-12rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                  <div className="mb-4 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">Questions</p>
-                      <p className="text-xs text-gray-500">Edit the list on the right side.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setEditQuestions((prev) => [...prev, { id: crypto.randomUUID(), type: "question", content: "", prompt: "", order_index: prev.length, rubric: "" }])}
-                      className="text-primary text-sm"
-                    >
-                      Add Question
-                    </button>
                   </div>
+                </label>
 
-                  <div className="space-y-3">
-                    {editQuestions.map((question, index) => (
-                      <div key={question.id} className="rounded-2xl border border-gray-200 bg-white p-3">
-                        <div className="flex items-start gap-3">
-                          <div className="text-sm font-medium text-gray-600 w-24">
-                            {questionLabel(editPart, question, index)}
-                          </div>
-                          <div className="mx-auto p-3 text-primary outline-dashed outline-[var(--primary)] rounded-2xl flex items-center">
-                            <select
-                              value={question.type ?? "question"}
-                              onChange={(e) => {
-                                const updated = [...editQuestions];
-                                const nextType = e.target.value as "question" | "bullet";
-                                updated[index] = {
-                                  ...updated[index],
-                                  type: nextType,
-                                };
-                                setEditQuestions(updated);
-                              }}
-                              className="bg-transparent outline-none w-full"
-                            >
-                              <option value="question">Question</option>
-                              <option value="bullet">Bullet</option>
-                            </select>
-                          </div>
-                          <div className="flex-1">
-                            <InputField
-                              className="w-full"
-                              value={question.content}
-                              onChange={(value) => setEditQuestions((prev) => prev.map((item, idx) => idx === index ? { ...item, content: value } : item))}
-                              placeholder={
-                                question.type === "bullet"
-                                  ? "Enter bullet point"
-                                  : editPart === 2 && index === 0
-                                  ? "Enter cue card title or topic"
-                                  : "Enter question content"
-                              }
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setEditQuestions((prev) => prev.filter((_, idx) => idx !== index))}
-                            className="text-red-500"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        {question.type === "question" ? (
-                          <div className="mt-4 space-y-4">
-                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                              <div className="mb-3">
-                                <p className="text-sm font-semibold text-gray-800">Prompt</p>
-                                <p className="text-xs text-gray-500">Enter a prompt for this question.</p>
-                              </div>
-                              <TextArea
-                                className="w-full"
-                                value={question.prompt || ""}
-                                onChange={(value) => setEditQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, prompt: value } : item)))}
-                                placeholder="Enter question prompt"
-                                rows={3}
-                              />
-                            </div>
-                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                              <div className="mb-3">
-                                <p className="text-sm font-semibold text-gray-800">Rubric</p>
-                                <p className="text-xs text-gray-500">Enter rubric for this question (paragraph).</p>
-                              </div>
-                              <TextArea
-                                className="w-full"
-                                value={question.rubric || ""}
-                                onChange={(value) => setEditQuestions((prev) => prev.map((item, idx) => (idx === index ? { ...item, rubric: value } : item)))}
-                                placeholder="Enter rubric (paragraph)"
-                                rows={5}
-                              />
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <label className="w-full block text-sm font-semibold text-primary">
+                  Due Time
+                  <input
+                    type="time"
+                    value={editDueTime}
+                    onChange={(e) => setEditDueTime(e.target.value)}
+                    className="w-full mt-2 p-2 border border-gray-300 rounded-lg"
+                  />
+                </label>
               </div>
 
-              <div className="mt-4 border-t border-gray-200 pt-4 flex justify-end gap-2">
+              <div className="mt-6 border-t border-gray-200 pt-4 flex flex-wrap gap-2 justify-end">
                 <TextButton variant="secondary" onClick={() => setIsEditOpen(false)}>
                   Cancel
                 </TextButton>
@@ -1654,12 +2223,13 @@ export default function ClassAssignmentsPage() {
                           <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Status</th>
                           <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Submitted At</th>
                           <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Score at submission</th>
+                          <th className="px-5 py-3 text-left text-xs font-medium text-gray-500">Result</th>
                         </tr>
                       </thead>
                       <tbody>
                         {studentStatuses.length === 0 ? (
                           <tr>
-                            <td colSpan={4} className="px-5 py-4 text-sm text-gray-500">No students found in this class.</td>
+                            <td colSpan={5} className="px-5 py-4 text-sm text-gray-500">No students found in this class.</td>
                           </tr>
                         ) : (
                           studentStatuses.map((student) => (
@@ -1686,6 +2256,15 @@ export default function ClassAssignmentsPage() {
                               <td className="px-5 py-4 text-sm text-gray-500">
                                 {typeof student.latest_score === 'number' ? student.latest_score.toFixed(1) : '-'}
                               </td>
+                              <td className="px-5 py-4 text-sm text-gray-500">
+                                <button
+                                  type="button"
+                                  onClick={() => openSummaryModal(student)}
+                                  className="inline-flex items-center justify-center rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-xs font-semibold text-primary-700 transition hover:bg-primary-100"
+                                >
+                                  View Result
+                                </button>
+                              </td>
                             </tr>
                           ))
                         )}
@@ -1696,6 +2275,91 @@ export default function ClassAssignmentsPage() {
               </div>
               <div className="border-t border-gray-200 p-6 text-right">
                 <TextButton variant="secondary" onClick={() => setShowStatusModal(false)}>
+                  Close
+                </TextButton>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showSummaryModal && selectedSummaryStatus && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="border-b border-gray-200 p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-semibold text-gray-900">Speaking Result — {selectedSummaryStatus.email}</h2>
+                    <p className="mt-2 text-sm text-gray-500">Assignment: {selectedAssignmentForStatus?.title || "Selected assignment"}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeSummaryModal}
+                    className="text-gray-500 hover:text-gray-900"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="p-6">
+                {(() => {
+                  const analysisData = selectedSummaryStatus.analysis && typeof selectedSummaryStatus.analysis === "object"
+                    ? selectedSummaryStatus.analysis
+                    : null;
+
+                  const metrics = Array.isArray(analysisData?.metrics)
+                    ? analysisData.metrics.map((m: any) => ({ label: m.label ?? m.id ?? "Metric", score: String(m.score ?? m.value ?? "—"), description: m.text ?? m.description ?? "" }))
+                    : Array.isArray(selectedSummaryStatus.metrics)
+                      ? selectedSummaryStatus.metrics.map((m: any) => ({ label: m.label ?? m.id ?? "Metric", score: String(m.score ?? m.value ?? "—"), description: m.text ?? m.description ?? "" }))
+                      : [];
+
+                  const overallStr = typeof analysisData?.overallScore === "string"
+                    ? analysisData.overallScore
+                    : typeof analysisData?.overall === "string"
+                      ? analysisData.overall
+                      : typeof selectedSummaryStatus.latest_score === "number"
+                        ? String(Number(selectedSummaryStatus.latest_score).toFixed(1))
+                        : "—";
+
+                  const levelLabel = typeof analysisData?.level === "string"
+                    ? analysisData.level
+                    : getCurrentLevelLabel(formatBand(Number(overallStr) || null));
+
+                  const recommendation = typeof analysisData?.recommendation === "string"
+                    ? analysisData.recommendation
+                    : selectedSummaryStatus.notes ?? null;
+
+                  const isSubmitted = selectedSummaryStatus.status === "submitted";
+                  const hasAnyResult = metrics.length > 0 || Boolean(recommendation) || overallStr !== "—";
+
+                  if (!isSubmitted) {
+                    return (
+                      <div className="rounded-2xl border border-dashed border-gray-200 bg-yellow-50 p-6 text-center text-sm text-yellow-700">
+                        This student has not submitted the assignment yet.
+                      </div>
+                    );
+                  }
+
+                  if (!hasAnyResult) {
+                    return (
+                      <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-600">
+                        Assignment has been submitted, but no speaking result is available yet.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <AnalysisCard
+                      title={analysisData?.title ?? selectedAssignmentForStatus?.title ?? "Speaking result"}
+                      overallScore={overallStr}
+                      level={levelLabel}
+                      metrics={metrics}
+                      recommendation={recommendation ?? undefined}
+                    />
+                  );
+                })()}
+              </div>
+              <div className="border-t border-gray-200 p-6 text-right">
+                <TextButton variant="secondary" onClick={closeSummaryModal}>
                   Close
                 </TextButton>
               </div>

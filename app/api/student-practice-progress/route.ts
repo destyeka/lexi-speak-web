@@ -15,6 +15,8 @@ type PracticeProgressPayload = {
     score: number;
     text: string;
   }>;
+  assignment_id?: string | null;
+  analysis?: Record<string, unknown> | null;
 };
 
 export const runtime = "nodejs";
@@ -42,6 +44,8 @@ export async function POST(request: Request) {
     const lastPartIndex = Number(body.last_part_index);
     const notes = body.notes ?? null;
     const metrics = Array.isArray(body.metrics) ? body.metrics : [];
+    const assignmentId = typeof body.assignment_id === "string" ? body.assignment_id : null;
+    const analysis = body.analysis && typeof body.analysis === "object" ? body.analysis : null;
 
     if (!Number.isFinite(latestScore) || !Number.isFinite(progressPercent) || !Number.isFinite(lastPartIndex) || !lastActivityAt) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -115,6 +119,65 @@ export async function POST(request: Request) {
 
     if (progressWriteError) {
       return NextResponse.json({ error: progressWriteError.message }, { status: 500 });
+    }
+
+    // If assignmentId is provided, also upsert the assignment_submissions row
+    if (assignmentId) {
+      try {
+        // Use recorded_at from student_score_history if available to avoid timestamp regressions
+        let submittedAt = new Date().toISOString();
+        try {
+          const { data: latestScoreRow, error: scoreError } = await supabase
+            .from("student_score_history")
+            .select("recorded_at")
+            .eq("student_id", studentId)
+            .order("recorded_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (!scoreError && latestScoreRow?.recorded_at) {
+            submittedAt = latestScoreRow.recorded_at;
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        const { error: submissionError } = await supabase
+          .from("assignment_submissions")
+          .upsert([
+            {
+              assignment_id: assignmentId,
+              student_id: studentId,
+              status: "submitted",
+              submitted_at: submittedAt,
+              updated_at: submittedAt,
+              score: latestScore,
+              metrics,
+              analysis,
+            },
+          ], { onConflict: "assignment_id,student_id" });
+        if (submissionError) {
+          const msg = String(submissionError.message || submissionError);
+          if (msg.includes("column \"analysis\" does not exist") || msg.includes("42703")) {
+            await supabase
+              .from("assignment_submissions")
+              .upsert([
+                {
+                  assignment_id: assignmentId,
+                  student_id: studentId,
+                  status: "submitted",
+                  submitted_at: submittedAt,
+                  updated_at: submittedAt,
+                  score: latestScore,
+                  metrics,
+                },
+              ], { onConflict: "assignment_id,student_id" });
+          } else {
+            console.error("Failed to upsert assignment_submissions:", submissionError.message || submissionError);
+          }
+        }
+      } catch (e) {
+        console.error("Error while upserting assignment_submissions:", e);
+      }
     }
 
     return NextResponse.json({

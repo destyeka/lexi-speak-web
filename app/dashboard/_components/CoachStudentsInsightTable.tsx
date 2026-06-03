@@ -109,7 +109,7 @@ export default function CoachStudentsInsightTable() {
       const { data: classesData, error: classesError } = await supabase
         .from("classes")
         .select("id, name")
-        .eq("coach_id", user.id)
+        .or(`coach_id.eq.${user.id},created_by.eq.${user.id}`)
         .order("name", { ascending: true });
 
       if (classesError) {
@@ -120,23 +120,32 @@ export default function CoachStudentsInsightTable() {
       setClasses(classRows);
       const classIds = classRows.map((cls) => cls.id);
 
-      if (classIds.length === 0) {
-        setStudents([]);
-        setLoading(false);
-        return;
-      }
-
-      const { data: classMembersData, error: classMembersError } = await supabase
-        .from("class_members")
-        .select("class_id, student_id")
-        .in("class_id", classIds);
+      const { data: classMembersData, error: classMembersError } = classIds.length > 0
+        ? await supabase
+            .from("class_members")
+            .select("class_id, student_id")
+            .in("class_id", classIds)
+        : { data: [], error: null };
 
       if (classMembersError) {
         setNotice(`Failed to load class members: ${classMembersError.message}.`);
       }
 
       const classMembers = (classMembersData as { class_id: string; student_id: string }[] | null) ?? [];
-      const studentIds = Array.from(new Set(classMembers.map((member) => member.student_id)));
+      const classStudentIds = classMembers.map((member) => member.student_id);
+
+      const { data: directStudentsData, error: directStudentsError } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("role", "user")
+        .eq("coach_id", user.id);
+
+      if (directStudentsError) {
+        setNotice(`${directStudentsError.message}. If coach_id is not created yet, run supabase/profiles_setup.sql.`);
+      }
+
+      const directStudentIds = ((directStudentsData as { id: string }[] | null) ?? []).map((row) => row.id);
+      const studentIds = Array.from(new Set([...classStudentIds, ...directStudentIds]));
 
       if (studentIds.length === 0) {
         setStudents([]);
@@ -164,7 +173,7 @@ export default function CoachStudentsInsightTable() {
 
       const { data: progressRows, error: progressError } = await supabase
         .from("student_progress")
-        .select("student_id, latest_score, progress_percent, speaking_attempts, last_activity_at, updated_at, notes")
+        .select("student_id, speaking_attempts, notes")
         .in("student_id", studentIds);
 
       if (progressError) {
@@ -173,9 +182,54 @@ export default function CoachStudentsInsightTable() {
         );
       }
 
+      const { data: submissionsData, error: submissionsError } = await supabase
+        .from("assignment_submissions")
+        .select("student_id, assignment_id, status, score, started_at, submitted_at")
+        .in("student_id", studentIds);
+
+      if (submissionsError) {
+        setNotice(`${submissionsError.message}. Failed to load assignment activity for student insight.`);
+      }
+
+      const { data: assignmentsData, error: assignmentsError } = await supabase
+        .from("assignments")
+        .select("id, class_id")
+        .in("class_id", classIds);
+
+      if (assignmentsError) {
+        setNotice(`${assignmentsError.message}. Failed to load assignments for coach's classes.`);
+      }
+
+      const assignmentsByClass = new Map<string, number>();
+      ((assignmentsData as Array<{ id: string; class_id: string }> | null) ?? []).forEach((assignment) => {
+        assignmentsByClass.set(assignment.class_id, (assignmentsByClass.get(assignment.class_id) ?? 0) + 1);
+      });
+
       const progressMap = new Map(
         ((progressRows as StudentProgressRow[] | null) ?? []).map((row) => [row.student_id, row])
       );
+      const submissionsByStudent = new Map<string, Array<{
+        student_id: string;
+        assignment_id: string;
+        status: string;
+        score: number | null;
+        started_at: string | null;
+        submitted_at: string | null;
+      }>>();
+
+      ((submissionsData as Array<{
+        student_id: string;
+        assignment_id: string;
+        status: string;
+        score: number | null;
+        started_at: string | null;
+        submitted_at: string | null;
+      }> | null) ?? []).forEach((submission) => {
+        const list = submissionsByStudent.get(submission.student_id) ?? [];
+        list.push(submission);
+        submissionsByStudent.set(submission.student_id, list);
+      });
+
       const classNameMap = new Map(classRows.map((cls) => [cls.id, cls.name]));
       const membershipMap = new Map<string, string[]>();
 
@@ -188,15 +242,49 @@ export default function CoachStudentsInsightTable() {
 
       const mergedRows: StudentInsight[] = studentRows.map((row) => {
         const progress = progressMap.get(row.id);
+        const submissions = submissionsByStudent.get(row.id) ?? [];
+
+        const latestActivityAt = submissions.reduce<string | null>((latest, submission) => {
+          const timestamps = [submission.submitted_at, submission.started_at].filter(Boolean) as string[];
+          const candidate = timestamps
+            .map((value) => new Date(value).getTime())
+            .reduce((max, current) => Math.max(max, current), -Infinity);
+          if (candidate === -Infinity) return latest;
+          const currentDate = new Date(candidate).toISOString();
+          return !latest || new Date(currentDate) > new Date(latest) ? currentDate : latest;
+        }, null);
+
+        const scoredSubmissions = submissions.filter((submission) => submission.score !== null && submission.score !== undefined);
+        const avgScore = scoredSubmissions.length > 0
+          ? scoredSubmissions.reduce((sum, submission) => sum + (submission.score ?? 0), 0) / scoredSubmissions.length
+          : null;
+
+        const completedAssignments = submissions.filter((submission) =>
+          submission.status === "submitted" || submission.status === "in_progress"
+        ).length;
+
+        const studentClassIds = classMembers
+          .filter((member) => member.student_id === row.id)
+          .map((member) => member.class_id);
+
+        const totalAssignmentsForStudent = studentClassIds.reduce(
+          (sum, classId) => sum + (assignmentsByClass.get(classId) ?? 0),
+          0
+        );
+
+        const progressPercent = totalAssignmentsForStudent > 0
+          ? Number(((completedAssignments / totalAssignmentsForStudent) * 100).toFixed(1))
+          : null;
+
         const classesForStudent = membershipMap.get(row.id) ?? [];
         return {
           ...row,
           name: getStudentNameFromEmail(row.email),
-          latest_score: progress?.latest_score ?? null,
-          progress_percent: progress?.progress_percent ?? null,
+          latest_score: avgScore,
+          progress_percent: progressPercent,
           speaking_attempts: progress?.speaking_attempts ?? 0,
-          last_activity_at: progress?.last_activity_at ?? null,
-          updated_at: progress?.updated_at ?? null,
+          last_activity_at: latestActivityAt,
+          updated_at: null,
           notes: progress?.notes ?? null,
           classes: classesForStudent,
           class_ids: classMembers

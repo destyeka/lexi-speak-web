@@ -192,8 +192,11 @@ export default function QuestionBank({
         title,
         prompt,
         is_active,
+        is_public,
         created_at,
-        unit_id
+        unit_id,
+        created_by,
+        session_units(id, is_public, created_by)
       `)
                         .order("created_at", {
                             ascending: false,
@@ -221,6 +224,8 @@ export default function QuestionBank({
         category,
         access_level,
         is_active,
+        is_public,
+        created_by,
         created_at
       `)
                         .order("created_at", {

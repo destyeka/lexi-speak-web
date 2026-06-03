@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { useProfileStore } from "@/hooks/useProfileStore";
 import UserAddressCard from "@/components/user-profile/UserAddressCard";
 import UserInfoCard from "@/components/user-profile/UserInfoCard";
 import UserMetaCard from "@/components/user-profile/UserMetaCard";
@@ -14,6 +15,7 @@ type ProfileRow = {
   role: AppRole | null;
   created_at: string | null;
   affiliation: string | null;
+  avatar_url?: string | null;
 };
 
 type EditableProfile = {
@@ -75,6 +77,7 @@ const getDisplayName = (user: {
 export default function ProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const setProfileStore = useProfileStore((state) => state.setProfile);
   const [displayName, setDisplayName] = useState("User");
   const [editableProfile, setEditableProfile] = useState<EditableProfile>({
     firstName: "User",
@@ -154,17 +157,25 @@ export default function ProfilePage() {
 
       const { data } = await supabase
         .from("profiles")
-        .select("email, role, created_at, affiliation")
+        .select("email, role, created_at, affiliation, avatar_url")
         .eq("id", user.id)
         .maybeSingle();
 
-      setProfile((data as ProfileRow | null) ?? null);
+      const profileData = (data as ProfileRow | null) ?? null;
+      setProfile(profileData);
+
+      setProfileStore({
+        id: user.id,
+        fullName: resolvedDisplayName,
+        email: user.email ?? null,
+        avatarUrl: profileData?.avatar_url || null,
+      });
 
       // Override with database affiliation if it exists (database is source of truth)
-      if (data?.affiliation) {
-        setEditableProfile(prev => ({
+      if (profileData?.affiliation) {
+        setEditableProfile((prev) => ({
           ...prev,
-          affiliation: data.affiliation || "-",
+          affiliation: profileData.affiliation || "-",
         }));
       }
 
@@ -172,7 +183,7 @@ export default function ProfilePage() {
     };
 
     void load();
-  }, [router]);
+  }, [router, setProfileStore]);
 
   const handleSaveUserInfo = async (values: EditableProfile) => {
     const trimmedFirstName = values.firstName.trim();
@@ -214,6 +225,18 @@ export default function ProfilePage() {
       bio: values.bio.trim() || "-",
       affiliation: values.affiliation.trim() || "-",
     });
+    // update shared profile store (display name) so header updates
+    try {
+      useProfileStore.getState().setProfile({ fullName });
+    } catch (e) {
+      /* ignore */
+    }
+    // notify other components (header) that profile changed
+    try {
+      (window as any).dispatchEvent(new CustomEvent("profile:updated", { detail: { fullName: fullName } }));
+    } catch (e) {
+      /* ignore */
+    }
   };
 
   const handleSaveAddress = async (values: EditableAddress) => {

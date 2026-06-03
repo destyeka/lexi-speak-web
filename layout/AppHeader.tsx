@@ -3,6 +3,8 @@ import { ThemeToggleButton } from "@/components/common/ThemeToggleButton";
 import NotificationDropdown from "@/components/header/NotificationDropdown";
 import UserDropdown from "@/components/header/UserDropdown";
 import { useSidebar } from "@/context/SidebarContext";
+import { useProfileStore } from "@/hooks/useProfileStore";
+import { supabase } from "@/lib/supabase";
 import Image from "next/image";
 import Link from "next/link";
 import React, { useState ,useEffect,useRef} from "react";
@@ -11,6 +13,10 @@ const AppHeader: React.FC = () => {
   const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
 
   const { isMobileOpen, toggleSidebar, toggleMobileSidebar } = useSidebar();
+  const profileId = useProfileStore((state) => state.id);
+  const profileAvatarUrl = useProfileStore((state) => state.avatarUrl);
+  const setProfile = useProfileStore((state) => state.setProfile);
+  const resetProfile = useProfileStore((state) => state.resetProfile);
 
   const handleToggle = () => {
     if (window.innerWidth >= 1024) {
@@ -24,6 +30,97 @@ const AppHeader: React.FC = () => {
     setApplicationMenuOpen(!isApplicationMenuOpen);
   };
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch user avatar from database on login only, then cache indefinitely
+  useEffect(() => {
+    const fetchUserAvatarOnLogin = async () => {
+      try {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError || !user) {
+          if (userError) {
+            console.debug("Auth error fetching user:", userError.message);
+          }
+          return;
+        }
+
+        // Only fetch if we don't already have a cached avatar for this user
+        if (profileId === user.id && profileAvatarUrl) {
+          return;
+        }
+
+        if (profileId && profileId !== user.id) {
+          // User switched - clear old cache
+          resetProfile();
+        }
+
+        const { data: profileData, error: profileError } = await supabase
+          .from("profiles")
+          .select("avatar_url")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (profileError) {
+          console.debug("Profile fetch error:", profileError.message);
+          return;
+        }
+
+        if (!profileData) {
+          setProfile({ id: user.id, avatarUrl: null });
+          return;
+        }
+
+        setProfile({ id: user.id, avatarUrl: profileData.avatar_url ?? null });
+      } catch (error) {
+        console.debug("Unexpected error fetching avatar:", error);
+      }
+    };
+
+    // Listen for auth state changes - fetch on login only
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event) => {
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        // Fetch/refresh avatar on login or explicit update
+        void fetchUserAvatarOnLogin();
+      } else if (event === "SIGNED_OUT") {
+        resetProfile();
+      }
+    });
+
+    // Initial check on mount
+    void fetchUserAvatarOnLogin();
+
+    // Listen for storage changes from other tabs (cross-tab sync)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "profile-store" && e.newValue) {
+        try {
+          const parsedData = JSON.parse(e.newValue);
+          const state = parsedData.state;
+          if (state) {
+            setProfile({ 
+              id: state.id || null,
+              avatarUrl: state.avatarUrl,
+              fullName: state.fullName || null,
+              email: state.email || null,
+            });
+          }
+        } catch (error) {
+          console.debug("Error parsing storage change:", error);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [setProfile, profileId, resetProfile]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

@@ -3,6 +3,7 @@
 import * as React from "react";
 
 type TextButtonProps = {
+    type?: "button" | "submit" | "reset";
     onClick?: () => void;
     variant?: "primary" | "secondary";
     disabled?: boolean;
@@ -11,6 +12,7 @@ type TextButtonProps = {
 };
 
 export default function TextButton({
+    type = "button",
     onClick,
     variant = "primary",
     disabled = false,
@@ -29,6 +31,7 @@ export default function TextButton({
 
     return (
         <button
+            type={type}
             onClick={onClick}
             disabled={disabled}
             className={`${base} ${variants[variant]} ${disabled ? "opacity-50 cursor-not-allowed" : ""

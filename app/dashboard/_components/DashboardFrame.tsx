@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
+import { useProfileStore } from "@/hooks/useProfileStore";
 
 type ProfileLite = {
   email: string;
@@ -47,8 +48,11 @@ export default function DashboardFrame({ children }: { children: ReactNode }) {
     void loadProfile();
   }, [router]);
 
+  const resetProfile = useProfileStore((state) => state.resetProfile);
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    resetProfile();
     router.replace("/login");
   };
 

@@ -1,11 +1,11 @@
 "use client";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import React, { useState, useEffect } from "react";
 import { Dropdown } from "../ui/dropdown/Dropdown";
 import { DropdownItem } from "../ui/dropdown/DropdownItem";
 import { supabase } from "@/lib/supabase";
+import { useProfileStore } from "@/hooks/useProfileStore";
 
 type UserData = {
   displayName: string;
@@ -39,6 +39,13 @@ export default function UserDropdown() {
     email: "loading...",
   });
 
+  const avatarUrl = useProfileStore((s) => s.avatarUrl);
+  const profileFullName = useProfileStore((s) => s.fullName);
+  const profileEmail = useProfileStore((s) => s.email);
+  const profileId = useProfileStore((s) => s.id);
+  const setProfile = useProfileStore((s) => s.setProfile);
+  const resetProfile = useProfileStore((s) => s.resetProfile);
+
   useEffect(() => {
     const loadUserData = async () => {
       const {
@@ -56,9 +63,13 @@ export default function UserDropdown() {
 
       const metadataDisplayName = resolveMetadataName(user);
 
+      if (profileId && profileId !== user.id) {
+        // User switched - reset store
+        resetProfile();
+      }
+
       const { data: profile, error } = await supabase
         .from("profiles")
-        // Request only safe/common columns to avoid PostgREST 400 if schema differs
         .select("id, email, full_name, name, first_name, last_name")
         .eq("id", user.id)
         .maybeSingle();
@@ -78,10 +89,18 @@ export default function UserDropdown() {
 
       const displayName = getDisplayName();
 
+      // Update local UI values
       setUserData({
         displayName: displayName.split(" ")[0],
         fullName: displayName,
         email: user.email || "No email",
+      });
+
+      // Update store with user info (but NOT avatar - let AppHeader handle that)
+      setProfile({
+        id: user.id,
+        fullName: displayName,
+        email: user.email || null,
       });
     };
 
@@ -90,7 +109,13 @@ export default function UserDropdown() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "USER_UPDATED" || event === "SIGNED_IN") {
+      if (event === "SIGNED_OUT") {
+        resetProfile();
+        return;
+      }
+
+      // Refresh user data on SIGNED_IN or USER_UPDATED for fullName/email changes
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
         void loadUserData();
       }
     });
@@ -98,9 +123,15 @@ export default function UserDropdown() {
     return () => {
       subscription.unsubscribe();
     };
-  }, []);
+  }, [profileId, resetProfile, setProfile]);
 
-function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
+  const displayName = (profileFullName || userData.fullName || "User").split(" ")[0];
+  const fullName = profileFullName || userData.fullName || "User";
+  const email = profileEmail || userData.email || "Not signed in";
+
+  const avatarUrlWithCacheBusting = avatarUrl || "/images/user/owner.jpg";
+
+  function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
   e.stopPropagation();
   setIsOpen((prev) => !prev);
 }
@@ -111,6 +142,7 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    resetProfile();
     closeDropdown();
     router.replace("/login");
   };
@@ -125,12 +157,12 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
           <Image
             width={44}
             height={44}
-            src="/images/user/owner.jpg"
-            alt="User"
+            src={avatarUrlWithCacheBusting}
+            alt={profileFullName || userData.displayName}
           />
         </span>
 
-        <span className="block mr-1 font-medium text-theme-sm">{userData.displayName}</span>
+        <span className="block mr-1 font-medium text-theme-sm">{displayName}</span>
 
         <svg
           className={`stroke-gray-500 dark:stroke-gray-400 transition-transform duration-200 ${
@@ -140,8 +172,7 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
           height="20"
           viewBox="0 0 18 20"
           fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
+          >
           <path
             d="M4.3125 8.65625L9 13.3437L13.6875 8.65625"
             stroke="currentColor"
@@ -159,10 +190,10 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
       >
         <div>
           <span className="block font-medium text-gray-700 text-theme-sm dark:text-gray-400">
-            {userData.fullName}
+            {fullName}
           </span>
           <span className="mt-0.5 block text-theme-xs text-gray-500 dark:text-gray-400">
-            {userData.email}
+            {email}
           </span>
         </div>
 

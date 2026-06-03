@@ -132,32 +132,77 @@ export async function getAssignmentTopics(assignmentId: string): Promise<Topic[]
       return [];
     }
 
-    const questions = await getAssignmentQuestions(assignmentId);
-    const details: TopicDetail[] = questions.map((question) => ({
-      id: question.id,
-      type: question.type || "question",
-      content: question.content,
-      prompt: question.prompt ?? null,
-      rubric: question.rubric ?? null,
-      order_index: question.order_index,
-    }));
+    const { data: questions, error: questionsError } = await supabase
+      .from("assignment_questions")
+      .select("id, topic_id, part, content, prompt, type, order_index, rubric")
+      .eq("assignment_id", assignmentId)
+      .order("part", { ascending: true })
+      .order("order_index", { ascending: true });
 
-    const assignmentPrompt = assignment.description?.trim() ||
-      details.find((d) => d.type === "question" && d.prompt && d.prompt.trim().length > 0)?.prompt?.trim() ||
-      "";
+    if (questionsError) {
+      console.error("Error fetching assignment questions:", questionsError);
+      return [];
+    }
 
-    return [
-      {
-        id: assignment.id,
-        part: assignment.part,
-        title: assignment.title,
+    const questionRows = (questions as AssignmentQuestion[]) || [];
+    if (!questionRows.length) {
+      return [];
+    }
+
+    const topicIds = Array.from(new Set(questionRows.map((q) => q.topic_id).filter(Boolean)));
+    const { data: topics, error: topicsError } = await supabase
+      .from("topics")
+      .select(
+        `id, topic_code, part, title, prompt, is_active, created_at, created_by, is_public`
+      )
+      .in("id", topicIds);
+
+    if (topicsError) {
+      console.error("Error fetching topics for assignment:", topicsError);
+    }
+
+    const topicsById = new Map<string, Topic>();
+    (topics as Topic[] | null ?? []).forEach((topic) => {
+      topicsById.set(topic.id, topic);
+    });
+
+    const questionsByPart = new Map<number, AssignmentQuestion[]>();
+    questionRows.forEach((question) => {
+      const part = question.part ?? 1;
+      const list = questionsByPart.get(part) || [];
+      list.push(question);
+      questionsByPart.set(part, list);
+    });
+
+    const sortedParts = Array.from(questionsByPart.keys()).sort((a, b) => a - b);
+
+    return sortedParts.map((part) => {
+      const partQuestions = questionsByPart.get(part) ?? [];
+      const topic = topicsById.get(partQuestions[0]?.topic_id || "") || null;
+      const details: TopicDetail[] = partQuestions.map((question) => ({
+        id: question.id,
+        type: question.type || "question",
+        content: question.content,
+        prompt: question.prompt ?? null,
+        rubric: question.rubric ?? null,
+        order_index: question.order_index,
+      }));
+
+      const topicPrompt = topic?.prompt?.trim() || "";
+      const assignmentPrompt = assignment.description?.trim() || topicPrompt || "";
+
+      return {
+        id: topic?.id ?? `${assignment.id}-${part}`,
+        topic_code: topic?.topic_code,
+        part,
+        title: topic?.title ?? assignment.title,
         prompt: assignmentPrompt,
         description: assignment.description ?? null,
-        is_active: assignment.is_active,
-        created_at: assignment.created_at || new Date().toISOString(),
+        is_active: topic?.is_active ?? assignment.is_active,
+        created_at: topic?.created_at || assignment.created_at || new Date().toISOString(),
         details,
-      },
-    ];
+      };
+    });
   } catch (error) {
     console.error("Error fetching assignment topics:", error);
     return [];

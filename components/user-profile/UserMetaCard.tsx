@@ -5,7 +5,8 @@ import { Modal } from "../ui/modal/index";
 import Button from "../ui/button/Button";
 import Input from "../form/input/InputField";
 import Label from "../form/Label";
-import Image from "next/image";
+import { supabase } from "@/lib/supabase";
+import { useProfileStore } from "@/hooks/useProfileStore";
 
 type UserMetaCardProps = {
   name: string;
@@ -15,8 +16,12 @@ type UserMetaCardProps = {
 
 export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMetaCardProps) {
   const { isOpen, openModal, closeModal } = useModal();
-  const [avatarUrl, setAvatarUrl] = useState("/images/user/owner.jpg");
-  const [pendingAvatarUrl, setPendingAvatarUrl] = useState("/images/user/owner.jpg");
+  const profileAvatarUrl = useProfileStore((state) => state.avatarUrl);
+  const setProfile = useProfileStore((state) => state.setProfile);
+  const [pendingAvatarUrl, setPendingAvatarUrl] = useState<string>("");
+  const [selectedAvatarFile, setSelectedAvatarFile] = useState<File | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -26,7 +31,25 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
     };
   }, [pendingAvatarUrl]);
 
-  const avatarPreview = useMemo(() => pendingAvatarUrl, [pendingAvatarUrl]);
+  const avatarPreview = useMemo(
+    () =>
+      selectedAvatarFile
+        ? pendingAvatarUrl
+        : profileAvatarUrl || "/images/user/owner.jpg",
+    [selectedAvatarFile, pendingAvatarUrl, profileAvatarUrl]
+  );
+
+  // Add cache busting to stored avatar URL to force fresh loads
+  const avatarWithCacheBusting = useMemo(
+    () => {
+      if (selectedAvatarFile || !profileAvatarUrl || pendingAvatarUrl.startsWith("blob:")) {
+        return avatarPreview;
+      }
+      // For Supabase URLs, add cache buster
+      return `${profileAvatarUrl}${profileAvatarUrl.includes("?") ? "&" : "?"}t=${new Date().getTime()}`;
+    },
+    [avatarPreview, profileAvatarUrl, pendingAvatarUrl, selectedAvatarFile]
+  );
 
   const handleAvatarChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -36,6 +59,7 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
     }
 
     const nextAvatarUrl = URL.createObjectURL(file);
+    setSelectedAvatarFile(file);
     setPendingAvatarUrl((currentUrl) => {
       if (currentUrl.startsWith("blob:")) {
         URL.revokeObjectURL(currentUrl);
@@ -45,9 +69,71 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
     });
   };
 
-  const handleSave = () => {
-    setAvatarUrl(pendingAvatarUrl);
-    console.log("Saving changes...");
+  const handleSave = async () => {
+    if (!selectedAvatarFile) {
+      closeModal();
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setErrorMessage(userError?.message || "Unable to determine current user.");
+      setIsSaving(false);
+      return;
+    }
+
+    const extension = selectedAvatarFile.name.split(".").pop() || "jpg";
+    const cleanExtension = extension.replace(/[^a-zA-Z0-9]/g, "") || "jpg";
+    const fileName = `${user.id}_${Date.now()}.${cleanExtension}`;
+    const filePath = fileName;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(filePath, selectedAvatarFile, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      setErrorMessage(`Failed to upload avatar: ${uploadError.message}`);
+      setIsSaving(false);
+      return;
+    }
+
+    const { data: publicUrlData, error: publicUrlError } = await supabase.storage
+      .from("avatars")
+      .getPublicUrl(filePath);
+
+    if (publicUrlError || !publicUrlData?.publicUrl) {
+      setErrorMessage(publicUrlError?.message || "Unable to retrieve uploaded avatar url.");
+      setIsSaving(false);
+      return;
+    }
+
+    const publicUrl = publicUrlData.publicUrl;
+
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({ avatar_url: publicUrl })
+      .eq("id", user.id);
+
+    if (profileError) {
+      setErrorMessage(`Failed to update profile: ${profileError.message}`);
+      setIsSaving(false);
+      return;
+    }
+
+    setProfile({ avatarUrl: publicUrl });
+    setPendingAvatarUrl(publicUrl);
+    setSelectedAvatarFile(null);
+    setIsSaving(false);
     closeModal();
   };
   return (
@@ -56,11 +142,10 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
         <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-col items-center w-full gap-6 xl:flex-row">
             <div className="w-20 h-20 overflow-hidden border border-gray-200 rounded-full dark:border-gray-800">
-              <Image
-                width={80}
-                height={80}
-                src={avatarUrl}
+              <img
+                src={avatarWithCacheBusting}
                 alt="user"
+                className="h-full w-full object-cover"
               />
             </div>
             <div className="order-3 xl:order-2">
@@ -190,11 +275,10 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
 
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
                   <div className="w-20 h-20 overflow-hidden border border-gray-200 rounded-full dark:border-gray-800">
-                    <Image
-                      width={80}
-                      height={80}
+                    <img
                       src={avatarPreview}
                       alt="avatar preview"
+                      className="h-full w-full object-cover"
                     />
                   </div>
                   <div className="flex-1">
@@ -211,6 +295,9 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
                   </div>
                 </div>
               </div>
+              {errorMessage ? (
+                <p className="mt-3 text-sm font-medium text-red-600">{errorMessage}</p>
+              ) : null}
 
               <div className="mt-7">
                 <h5 className="mb-5 text-lg font-medium text-gray-800 dark:text-white/90 lg:mb-6">
@@ -282,11 +369,11 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
               </div>
             </div>
             <div className="flex items-center gap-3 px-2 mt-6 lg:justify-end">
-              <Button size="sm" variant="outline" onClick={closeModal}>
-                Close
+              <Button size="sm" variant="outline" onClick={closeModal} type="button">
+                Cancel
               </Button>
-              <Button size="sm" onClick={handleSave}>
-                Save Changes
+              <Button size="sm" variant="primary" onClick={handleSave} type="button" disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save Changes"}
               </Button>
             </div>
           </form>
