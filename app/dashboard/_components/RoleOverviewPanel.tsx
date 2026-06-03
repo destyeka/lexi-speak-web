@@ -765,6 +765,13 @@ export default function RoleOverviewPanel({
   const effectiveUnitCards = dynamicUnitCards.length ? dynamicUnitCards : unitCards;
 
   useEffect(() => {
+    console.log(
+      "DYNAMIC CARDS STATE",
+      dynamicUnitCards
+    );
+  }, [dynamicUnitCards]);
+
+  useEffect(() => {
     if (expectedRole !== "user") return;
 
     const loadTopicDrivenCards = async () => {
@@ -778,6 +785,11 @@ export default function RoleOverviewPanel({
           .from("topics")
           .select("id, part, title, prompt, is_active, topic_details(id, type, content, order_index)")
           .order("part", { ascending: true });
+
+        console.log("SESSION UNITS", sessionUnits);
+        console.log("TOPICS", topics);
+        console.log("SESSION ERROR", suErr);
+        console.log("TOPIC ERROR", tErr);
 
         console.debug("RoleOverviewPanel: fetched session_units/topics", { sessionUnits, topics, suErr, tErr });
 
@@ -857,6 +869,7 @@ export default function RoleOverviewPanel({
         const hasTopicMapping = topics.some((t: any) => t.unit_id || t.topic_code);
 
         if (!hasTopicMapping) {
+          console.log("HAS TOPIC MAPPING", hasTopicMapping);
           const part1Items: any[] = [];
           const part3Items: any[] = [];
           let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;
@@ -891,6 +904,8 @@ export default function RoleOverviewPanel({
           const topicTitle = part2Content.title || topics[0]?.title || "Topic";
           const topicPrompt = part2Content.prompt || topics[0]?.prompt || "Start your practice";
 
+          console.log("ENTERING FALLBACK");
+
           setDynamicUnitCards([
             {
               id: "topic-fallback",
@@ -920,6 +935,7 @@ export default function RoleOverviewPanel({
               },
             },
           ]);
+          console.log("SETTING FALLBACK CARD");
           console.debug("RoleOverviewPanel: built fallback card from topics because no unit mapping was available", { count: topics.length });
           return;
         }
@@ -1004,6 +1020,8 @@ export default function RoleOverviewPanel({
         });
 
         setDynamicUnitCards(cards);
+        console.log("CARDS", cards);
+        console.log("CARDS LENGTH", cards.length);
         console.debug("RoleOverviewPanel: built dynamic cards from session_units", { count: cards.length });
       } catch (err) {
         console.error("RoleOverviewPanel: error building topic-driven cards", err);
@@ -1483,8 +1501,8 @@ export default function RoleOverviewPanel({
                   type="button"
                   onClick={() => setActiveTab(1)}
                   className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 1
-                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
-                      : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
+                    ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
+                    : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
                     }`}
                 >
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 1</p>
@@ -1504,8 +1522,8 @@ export default function RoleOverviewPanel({
                   type="button"
                   onClick={() => setActiveTab(2)}
                   className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 2
-                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
-                      : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
+                    ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
+                    : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
                     }`}
                 >
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 2</p>
@@ -1525,8 +1543,8 @@ export default function RoleOverviewPanel({
                   type="button"
                   onClick={() => setActiveTab(3)}
                   className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 3
-                      ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
-                      : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
+                    ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
+                    : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
                     }`}
                 >
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 3</p>
