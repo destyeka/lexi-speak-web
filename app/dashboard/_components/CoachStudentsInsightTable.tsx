@@ -75,13 +75,32 @@ export default function CoachStudentsInsightTable() {
   const [savingNote, setSavingNote] = useState(false);
 
   useEffect(() => {
+    const getUserWithRetry = async () => {
+      const maxAttempts = 4;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const result = await supabase.auth.getUser();
+          return result;
+        } catch (err: any) {
+          const msg = err?.message ?? String(err ?? "");
+          console.warn(`supabase.auth.getUser attempt ${attempt} failed:`, msg);
+          if (attempt < maxAttempts && msg.includes("lock")) {
+            await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+            continue;
+          }
+          throw err;
+        }
+      }
+      return supabase.auth.getUser();
+    };
+
     const load = async () => {
       setLoading(true);
       setNotice("");
 
       const {
         data: { user },
-      } = await supabase.auth.getUser();
+      } = await getUserWithRetry();
 
       if (!user) {
         router.replace("/login");

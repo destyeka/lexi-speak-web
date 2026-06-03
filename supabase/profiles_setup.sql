@@ -119,7 +119,10 @@ create table if not exists public.student_score_history (
   unit_index integer,
   part_index integer,
   recorded_at timestamptz not null default now(),
-  recorded_by uuid references public.profiles(id) on delete set null
+  recorded_by uuid references public.profiles(id) on delete set null,
+  attempt_type text not null default 'practice' check (attempt_type in ('practice', 'test')),
+  assignment_id uuid,
+  analysis jsonb
 );
 
 alter table public.student_score_history
@@ -130,6 +133,22 @@ alter table public.student_score_history
 
 alter table public.student_score_history
   add column if not exists metrics jsonb not null default '[]'::jsonb;
+
+alter table public.student_score_history
+  add column if not exists attempt_type text not null default 'practice' check (attempt_type in ('practice', 'test'));
+
+alter table public.student_score_history
+  alter column attempt_type set default 'practice';
+
+update public.student_score_history
+set attempt_type = 'practice'
+where attempt_type is null;
+
+alter table public.student_score_history
+  add column if not exists assignment_id uuid;
+
+alter table public.student_score_history
+  add column if not exists analysis jsonb;
 
 create index if not exists student_score_history_student_idx on public.student_score_history(student_id);
 create index if not exists student_score_history_recorded_at_idx on public.student_score_history(recorded_at desc);
@@ -152,7 +171,8 @@ begin
       unit_index,
       part_index,
       recorded_at,
-      recorded_by
+      recorded_by,
+      attempt_type
     )
     values (
       new.student_id,
@@ -162,7 +182,8 @@ begin
       new.last_unit_index,
       new.last_part_index,
       coalesce(new.last_activity_at, new.updated_at, now()),
-      new.updated_by
+      new.updated_by,
+      'practice'
     );
   end if;
 
@@ -186,7 +207,10 @@ create or replace function public.record_student_practice_progress(
   last_unit_index integer,
   last_part_index integer,
   notes text,
-  metrics jsonb
+  metrics jsonb,
+  assignment_id uuid DEFAULT NULL,
+  analysis jsonb DEFAULT NULL,
+  attempt_type text DEFAULT 'practice'
 )
 returns void
 language plpgsql
@@ -253,7 +277,10 @@ begin
     unit_index,
     part_index,
     recorded_at,
-    recorded_by
+    recorded_by,
+    attempt_type,
+    assignment_id,
+    analysis
   )
   values (
     auth.uid(),
@@ -263,7 +290,10 @@ begin
     last_unit_index,
     last_part_index,
     coalesce(last_activity_at, now()),
-    auth.uid()
+    auth.uid(),
+    coalesce(attempt_type, 'practice'),
+    assignment_id,
+    analysis
   );
 end;
 $$;

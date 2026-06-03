@@ -17,6 +17,7 @@ type PracticeProgressPayload = {
   }>;
   assignment_id?: string | null;
   analysis?: Record<string, unknown> | null;
+  attempt_type?: "practice" | "test";
 };
 
 export const runtime = "nodejs";
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
     );
     const assignmentId = typeof body.assignment_id === "string" ? body.assignment_id : null;
     const analysis = body.analysis && typeof body.analysis === "object" ? body.analysis : null;
+    const attemptType = body.attempt_type === "test" ? "test" : "practice";
 
     if (!Number.isFinite(latestScore) || !Number.isFinite(progressPercent) || !Number.isFinite(lastPartIndex) || !lastActivityAt) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -87,6 +89,9 @@ export async function POST(request: Request) {
       last_part_index: lastPartIndex,
       notes,
       metrics,
+      assignment_id: assignmentId,
+      analysis,
+      attempt_type: attemptType,
     });
 
     if (!rpcError) {

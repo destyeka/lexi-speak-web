@@ -473,9 +473,10 @@ export default function ClassAssignmentsPage() {
       return;
     }
 
+    const bankCode = sessionData.session_code || sessionData.id;
     const topicInsertRows = createBankParts.map((part) => ({
       unit_id: sessionData.id,
-      topic_code: sessionData.session_code,
+      topic_code: `${bankCode}-P${part.part}`,
       category,
       category_code: categoryCode,
       session: sessionType,
