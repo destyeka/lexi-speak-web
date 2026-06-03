@@ -2204,13 +2204,6 @@ export default function ClassAssignmentsPage() {
                     <h2 className="text-2xl font-semibold text-gray-900">Student Status - {selectedAssignmentForStatus.title}</h2>
                     <p className="mt-2 text-sm text-gray-500">Due {formatDate(selectedAssignmentForStatus.due_at)}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowStatusModal(false)}
-                    className="text-gray-500 hover:text-gray-900"
-                  >
-                    Close
-                  </button>
                 </div>
               </div>
               <div className="p-6">
@@ -2275,7 +2268,7 @@ export default function ClassAssignmentsPage() {
               </div>
               <div className="border-t border-gray-200 p-6 text-right">
                 <TextButton variant="secondary" onClick={() => setShowStatusModal(false)}>
-                  Close
+                  Cancel
                 </TextButton>
               </div>
             </div>
@@ -2291,13 +2284,6 @@ export default function ClassAssignmentsPage() {
                     <h2 className="text-2xl font-semibold text-gray-900">Speaking Result — {selectedSummaryStatus.email}</h2>
                     <p className="mt-2 text-sm text-gray-500">Assignment: {selectedAssignmentForStatus?.title || "Selected assignment"}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={closeSummaryModal}
-                    className="text-gray-500 hover:text-gray-900"
-                  >
-                    Close
-                  </button>
                 </div>
               </div>
               <div className="p-6">
@@ -2360,7 +2346,7 @@ export default function ClassAssignmentsPage() {
               </div>
               <div className="border-t border-gray-200 p-6 text-right">
                 <TextButton variant="secondary" onClick={closeSummaryModal}>
-                  Close
+                  Cancel
                 </TextButton>
               </div>
             </div>
