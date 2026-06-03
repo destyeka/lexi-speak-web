@@ -106,7 +106,7 @@ const PAGES: PageMap = {
   PART2_INTRO: "part2_intro",
   PART2_SESSION: "part2_session",
   PART2_RESULT: "part2_result"
-  ,PART3_INTRO: "part3_intro",
+  , PART3_INTRO: "part3_intro",
   PART3_SESSION: "part3_session",
   PART3_RESULT: "part3_result"
 };
@@ -207,11 +207,11 @@ async function persistPracticeResult({
   const progressPercent = Number(Math.max(0, Math.min(100, (latestScore / 9) * 100)).toFixed(1));
   const metricPayload = Array.isArray(evaluation.metrics)
     ? evaluation.metrics.map((metric: MetricData) => ({
-        id: metric.id,
-        label: metric.label,
-        score: Number(metric.score),
-        text: metric.text,
-      }))
+      id: metric.id,
+      label: metric.label,
+      score: Number(metric.score),
+      text: metric.text,
+    }))
     : [];
   const analysisPayload = {
     title: partLabel,
@@ -246,6 +246,7 @@ async function persistPracticeResult({
       metrics: metricPayload,
       assignment_id: assignmentId ?? null,
       analysis: analysisPayload,
+      attempt_type: "practice",
     }),
   });
 
@@ -463,23 +464,23 @@ export default function LexaPracticeSession() {
 
   const part3Messages = part3Topic
     ? [
-        {
-          role: "lexa",
-          text: `We’ve moved on to Part 3. Let’s discuss ${part3Topic.title}.`,
-        },
-        {
-          role: "lexa",
-          text: part3Topic.prompt
-            ? part3Topic.prompt
-            : "I’ll ask more abstract questions related to this topic.",
-        },
-      ]
+      {
+        role: "lexa",
+        text: `We’ve moved on to Part 3. Let’s discuss ${part3Topic.title}.`,
+      },
+      {
+        role: "lexa",
+        text: part3Topic.prompt
+          ? part3Topic.prompt
+          : "I’ll ask more abstract questions related to this topic.",
+      },
+    ]
     : [
-        {
-          role: "lexa",
-          text: "We’ve moved on to Part 3. I’ll ask more abstract follow-up questions.",
-        },
-      ];
+      {
+        role: "lexa",
+        text: "We’ve moved on to Part 3. I’ll ask more abstract follow-up questions.",
+      },
+    ];
 
   const startSession = () => {
     if (isAssignmentLocked) return;
@@ -522,6 +523,7 @@ export default function LexaPracticeSession() {
   const finishSession = () => {
     setIsListening(false);
     setIsRecording(false);
+
 
     const remainingText = liveTranscript.trim() || interimTranscript.trim();
 
@@ -1085,7 +1087,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
         // prefer stop() so final result can be delivered before advancing
         isStoppingRef.current = true;
         try { recognitionRef.current.stop(); } catch { recognitionRef.current.abort(); }
-      } catch {}
+      } catch { }
       // leave onend to clear recognitionRef and isStoppingRef
     }
     setQuestionIndex((prev) => {
@@ -1096,7 +1098,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
       return next;
     });
   };
-  
+
   const toggleRecording = () => {
     if (isRecording) {
       stopRecording();
@@ -1114,7 +1116,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
 
     startRecording();
   };
-  
+
   const startRecording = async () => {
     setRecError(null);
     console.debug("[Lexa] startRecording called", { questionIndex: questionIndexRef.current });
@@ -1129,7 +1131,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
       try {
         isStoppingRef.current = true;
         recognitionRef.current.abort();
-      } catch {}
+      } catch { }
       recognitionRef.current = null;
       isStoppingRef.current = false;
     }
@@ -1143,7 +1145,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     transcriptRef.current = (questionTranscripts[questionIndexRef.current] || "").trim();
     // ensure accumulator exists for this question
     perQuestionAccumRef.current[questionIndexRef.current] = perQuestionAccumRef.current[questionIndexRef.current] || "";
-    
+
     recognition.onresult = (event: any) => {
       console.debug("[Lexa] onresult fired", { questionIndex: questionIndexRef.current });
       let accumulatedFinal = "";
@@ -1187,7 +1189,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
       if (e.error === "no-speech") {
         setInterimTranscript("");
         setLiveTranscript(transcriptRef.current || "");
-        try { if (recognitionRef.current && !isStoppingRef.current) recognitionRef.current.start(); } catch {}
+        try { if (recognitionRef.current && !isStoppingRef.current) recognitionRef.current.start(); } catch { }
         return;
       }
       setRecError(`Error: ${e.error}`);
@@ -1206,7 +1208,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
           console.debug("[Lexa] onerror persisted perQuestionAccumRef for idx", idxForSave, perQuestionAccumRef.current[idxForSave]);
         }, 0);
       }
-      try { if (recognitionRef.current) { isStoppingRef.current = true; recognitionRef.current.abort(); } } catch {}
+      try { if (recognitionRef.current) { isStoppingRef.current = true; recognitionRef.current.abort(); } } catch { }
       recognitionRef.current = null;
       setIsRecording(false);
     };
@@ -1228,17 +1230,17 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
             });
             console.debug("[Lexa] onend persisted perQuestionAccumRef for idx", idxForSave, perQuestionAccumRef.current[idxForSave]);
             // advance after short delay so UI updates show saved answer first
-            setTimeout(() => { try { if (hasMoreQuestions) advanceQuestion(); } catch {} }, 120);
+            setTimeout(() => { try { if (hasMoreQuestions) advanceQuestion(); } catch { } }, 120);
           }, 0);
         }
-        try { recognitionRef.current = null; } catch {}
+        try { recognitionRef.current = null; } catch { }
         setIsRecording(false);
         return;
       }
 
       // Jika tidak sedang berhenti sengaja, coba restart agar continuous listening tetap bekerja.
       if (recognitionRef.current && !isStoppingRef.current) {
-        try { recognition.start(); } catch {}
+        try { recognition.start(); } catch { }
       } else {
         setIsRecording(false);
       }
@@ -1269,7 +1271,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.onend = null;
-        try { isStoppingRef.current = true; recognitionRef.current.abort(); } catch {}
+        try { isStoppingRef.current = true; recognitionRef.current.abort(); } catch { }
         recognitionRef.current = null;
         isStoppingRef.current = false;
         setIsRecording(false);
@@ -1281,7 +1283,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
 
   useEffect(() => {
     if (questionRef.current) {
-      try { questionRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch {}
+      try { questionRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch { }
     }
   }, [questionIndex]);
 
@@ -1351,19 +1353,19 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   const startRecording = async () => {
     setRecError(null);
     setTranscript(""); setLiveTranscript(""); setInterimTranscript("");
-    
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
     // Pastikan jika ada instance lama yang masih menggantung, kita matikan dulu
     if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch {}
+      try { recognitionRef.current.abort(); } catch { }
     }
 
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
-    recognition.continuous = true; 
-    recognition.interimResults = true; 
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.lang = "en-US";
 
     recognition.onresult = (event: any) => {
@@ -1382,21 +1384,21 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
       setIsRecording(false);
     };
 
-    recognition.start(); 
+    recognition.start();
     setIsRecording(true);
   };
 
   // 2. PERBARUI FUNGSI STOP RECORDING
   const stopRecording = () => {
     setIsRecording(false);
-    if (recognitionRef.current) { 
-      try { 
+    if (recognitionRef.current) {
+      try {
         // Menggunakan abort() alih-alih stop() agar mikrofon langsung mati seketika
-        recognitionRef.current.abort(); 
+        recognitionRef.current.abort();
       } catch (e) {
         console.error("Gagal menghentikan perekaman:", e);
-      } 
-      recognitionRef.current = null; 
+      }
+      recognitionRef.current = null;
     }
   };
 
@@ -1404,7 +1406,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", width: "100%" }}>
-      
+
       {/* 1. Sisi Lexa (Kiri) - Bubble Pembuka / Feedback Instan */}
       <div style={styles.lexaBubbleWrap}>
         <LexaAvatar />
@@ -1424,12 +1426,12 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
       </div>
 
       {/* 2. CONTAINER UTAMA UNTUK INTERAKTIF FLIP 3D */}
-      <div 
+      <div
         onClick={() => setIsFlipped(!isFlipped)} // Klik di mana saja pada area kartu untuk membalikkan posisi
-        style={{ 
-          perspective: "1000px", 
-          width: "calc(100% - 50px)", 
-          marginLeft: "50px", 
+        style={{
+          perspective: "1000px",
+          width: "calc(100% - 50px)",
+          marginLeft: "50px",
           cursor: "pointer",
           userSelect: "none"
         }}
@@ -1442,17 +1444,17 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
           transformStyle: "preserve-3d",
           transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)"
         }}>
-          
+
           {/* ==================== SISI DEPAN: CUE CARD OPEN ==================== */}
           <div style={{
             position: "absolute",
             width: "100%",
             height: "100%",
             backfaceVisibility: "hidden",
-            background: "#ffffff", 
-            border: "1px solid #f3f4f6", 
-            borderRadius: "16px", 
-            padding: "32px", 
+            background: "#ffffff",
+            border: "1px solid #f3f4f6",
+            borderRadius: "16px",
+            padding: "32px",
             boxShadow: "0 4px 24px rgba(0,0,0,0.02)",
             boxSizing: "border-box"
           }}>
@@ -1496,10 +1498,10 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
             height: "100%",
             backfaceVisibility: "hidden",
             transform: "rotateY(180deg)", // Sisi belakang dibalik secara default agar terlihat pas saat diputar
-            background: "#ffffff", 
-            border: "1px solid #fecaca", 
-            borderRadius: "16px", 
-            padding: "32px", 
+            background: "#ffffff",
+            border: "1px solid #fecaca",
+            borderRadius: "16px",
+            padding: "32px",
             boxShadow: "0 4px 24px rgba(201, 91, 91, 0.05)",
             boxSizing: "border-box",
             display: "flex",
@@ -1513,7 +1515,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
 
             {/* Bulatan Mikrofon Tengah Menyerupai Gelombang Ring Merah */}
             <div style={{ display: "flex", justifyContent: "center", alignItems: "center", flex: 1, position: "relative" }}>
-              <div 
+              <div
                 onClick={(e) => {
                   e.stopPropagation(); // Mencegah kartu tidak sengaja terbalik kembali saat menekan mikrofon
                   isRecording ? stopRecording() : startRecording();
@@ -1532,18 +1534,18 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
               >
                 {/* Ikon mic sederhana */}
                 <svg width="40" height="40" viewBox="0 0 24 24" fill={isRecording ? "#ef4444" : "#9ca3af"}>
-                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
                 </svg>
               </div>
             </div>
 
             {/* Box Audio Transcription Internal di Sisi Bawah Kartu */}
-            <div 
+            <div
               onClick={(e) => e.stopPropagation()} // Supaya saat blok teks diseleksi, kartu tidak berputar kembali
               style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px", minHeight: "120px" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", color: "#6b7280", fontSize: "14px" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
                 <span style={{ fontWeight: "600" }}>Audio Transcription</span>
               </div>
               <p style={{ fontSize: "15px", color: "#111827", margin: 0, lineHeight: 1.5 }}>
@@ -1717,12 +1719,12 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
             const partScore = Number(row.score);
             const componentMetrics = Array.isArray(row.metrics)
               ? row.metrics
-                  .map((metric) => ({
-                    label: metric.label ?? "Component",
-                    score: metric.score !== undefined && metric.score !== null ? String(metric.score) : "-",
-                    description: metric.text ?? "",
-                  }))
-                  .filter((metric) => metric.label !== "Component" || metric.score !== "-")
+                .map((metric) => ({
+                  label: metric.label ?? "Component",
+                  score: metric.score !== undefined && metric.score !== null ? String(metric.score) : "-",
+                  description: metric.text ?? "",
+                }))
+                .filter((metric) => metric.label !== "Component" || metric.score !== "-")
               : [];
 
             if (!partDetails.some((item) => item.label === partLabel)) {
@@ -1775,6 +1777,7 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
             part_index: null,
             recorded_at: new Date().toISOString(),
             recorded_by: userData.user.id,
+            attempt_type: "test",
           });
 
           if (insertError) {
@@ -1823,6 +1826,11 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
         text: metric.text,
       }));
 
+      console.log(
+        "RESULT PAGE METRICS",
+        JSON.stringify(metricPayload, null, 2)
+      );
+
       const { data: userData, error: userError } = await supabase.auth.getUser();
       if (userError || !userData.user) {
         setSaveStatus("error");
@@ -1856,6 +1864,7 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
           last_part_index: partIndex,
           notes: evaluation.recommendation ?? null,
           metrics: metricPayload,
+          attempt_type: "test",
         }),
       });
 
@@ -1908,12 +1917,12 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
   const displayScoreData = testScoreData ?? scoreData;
   const testPartBreakdown = mode === "test" && partIndex === 3 && finalTestSummary && finalTestPartDetails
     ? finalTestPartDetails.map((part) => ({
-        label: part.label,
-        score: part.score.toFixed(1),
-        description: part.description,
-        evaluation: part.evaluation,
-        components: part.components,
-      }))
+      label: part.label,
+      score: part.score.toFixed(1),
+      description: part.description,
+      evaluation: part.evaluation,
+      components: part.components,
+    }))
     : undefined;
 
   return (
