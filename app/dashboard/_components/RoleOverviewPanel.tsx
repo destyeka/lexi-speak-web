@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ApexOptions } from "apexcharts";
+import TextButton from "@/components/ui/system/TextButton";
+import dynamic from "next/dynamic";
+const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
 import Link from "next/link";
+
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import UnitCard from "./UnitCard";
@@ -404,6 +408,8 @@ export default function RoleOverviewPanel({
     unit_index: number | null;
     part_index: number | null;
   }>({ open: false, unit_index: null, part_index: null });
+    const [selectedSessionDate, setSelectedSessionDate] = useState<string>("");
+  const [selectedHistoryPart, setSelectedHistoryPart] = useState<number | "all">("all");
 
   useEffect(() => {
     const load = async () => {
@@ -866,80 +872,7 @@ export default function RoleOverviewPanel({
         }
 
         const safeSessionUnits = sessionUnits ?? [];
-        const hasTopicMapping = topics.some((t: any) => t.unit_id || t.topic_code);
-
-        if (!hasTopicMapping) {
-          console.log("HAS TOPIC MAPPING", hasTopicMapping);
-          const part1Items: any[] = [];
-          const part3Items: any[] = [];
-          let part2Content = { title: "", prompt: "", points: [], takeaway: "" } as JourneyContentItem;
-
-          topics.forEach((t: any) => {
-            const details = Array.isArray(t.topic_details) ? t.topic_details : [];
-
-            if (t.part === 1) {
-              details.filter((d: any) => d.type === "question").forEach((d: any) => {
-                part1Items.push({ prompt: d.content, reply: "" });
-              });
-            }
-
-            if (t.part === 2) {
-              part2Content.title = t.title || part2Content.title;
-              part2Content.prompt = t.prompt || part2Content.prompt;
-              const bullets = details
-                .filter((d: any) => d.type === "bullet")
-                .sort((a: any, b: any) => (a.order_index || 0) - (b.order_index || 0))
-                .map((d: any) => d.content);
-              part2Content.points = bullets.slice(0, 4);
-              part2Content.takeaway = part2Content.takeaway || "Synchronized from admin";
-            }
-
-            if (t.part === 3) {
-              details.filter((d: any) => d.type === "question").forEach((d: any) => {
-                part3Items.push({ prompt: d.content, reply: "" });
-              });
-            }
-          });
-
-          const topicTitle = part2Content.title || topics[0]?.title || "Topic";
-          const topicPrompt = part2Content.prompt || topics[0]?.prompt || "Start your practice";
-
-          console.log("ENTERING FALLBACK");
-
-          setDynamicUnitCards([
-            {
-              id: "topic-fallback",
-              unitIndex: 1,
-              mode: "learn",
-              title: topicTitle,
-              subtitle: "Learn mode",
-              price: 0,
-              topic: topicPrompt,
-              description: topics[0]?.prompt || "",
-              accent: "from-brand-500 to-brand-300",
-              actionLabel: "Open Learn Hub",
-              parts: [
-                { id: 1, title: "Part 1", hint: "Chatbot warm-up" },
-                { id: 2, title: "Part 2", hint: "Core content card" },
-                { id: 3, title: "Part 3", hint: "Chatbot follow-up" },
-              ],
-              journey: {
-                part1: part1Items,
-                part2: {
-                  title: part2Content.title || "Core concept",
-                  prompt: part2Content.prompt || topicPrompt,
-                  points: part2Content.points || [],
-                  takeaway: part2Content.takeaway || "Synchronized from admin",
-                },
-                part3: part3Items,
-              },
-            },
-          ]);
-          console.log("SETTING FALLBACK CARD");
-          console.debug("RoleOverviewPanel: built fallback card from topics because no unit mapping was available", { count: topics.length });
-          return;
-        }
-
+        
         const cards: JourneyUnitCard[] = safeSessionUnits.map((unit: any) => {
           const seqFormatted = String(unit.seq ?? "").padStart(4, "0");
           const modePrefix = unit.type === "test" ? "TS" : "PT";
@@ -1131,6 +1064,38 @@ export default function RoleOverviewPanel({
   const filteredTestUnitCards = useMemo(() => {
     return filterAndSortUnitCards(effectiveUnitCards.filter((u) => u.mode === "test"));
   }, [searchQuery, effectiveUnitCards, sortOrder]);
+   const selectedSession = useMemo(() => {
+    return historyBySession.find((session) => session.date === selectedSessionDate) ?? historyBySession[0] ?? null;
+  }, [historyBySession, selectedSessionDate]);
+
+  const selectedSessionRows = useMemo(() => {
+    if (!selectedSession) return [];
+    const rows = historyRows.filter((row) => new Date(row.recorded_at).toLocaleDateString() === selectedSession.date);
+    if (selectedHistoryPart === "all") return rows;
+    return rows.filter((row) => row.part_index === selectedHistoryPart);
+  }, [historyRows, selectedHistoryPart, selectedSession]);
+
+  const selectedSessionStats = useMemo(() => {
+    const scores = selectedSessionRows.map((row) => formatBand(row.score) ?? 0);
+    const avg = scores.length > 0 ? scores.reduce((sum, value) => sum + value, 0) / scores.length : 0;
+    const max = scores.length > 0 ? Math.max(...scores) : 0;
+    const min = scores.length > 0 ? Math.min(...scores) : 0;
+    return {
+      avg: Number(avg.toFixed(1)),
+      max: Number(max.toFixed(1)),
+      min: Number(min.toFixed(1)),
+      count: selectedSessionRows.length,
+      hasData: scores.length > 0,
+    };
+  }, [selectedSessionRows]);
+
+  const selectedSessionChartBars = useMemo(() => {
+    return selectedSessionRows.slice(0, 12).map((row) => ({
+      label: `${row.part_index ?? 0}`,
+      value: formatBand(row.score) ?? 0,
+      recorded_at: row.recorded_at,
+    }));
+  }, [selectedSessionRows]);
 
   if (loading) {
     return (
@@ -1298,51 +1263,79 @@ export default function RoleOverviewPanel({
           <h3 className="text-base font-semibold text-gray-800 dark:text-white/90">Speaking Session History</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">View your practice sessions and scores breakdown by part.</p>
         </div>
-        <div className="mt-4 divide-y divide-gray-100 dark:divide-gray-800">
+        <div className="mt-4 space-y-3">
           {historyBySession.length === 0 ? (
             <p className="text-sm text-gray-500 py-2">No practice history available.</p>
           ) : (
-            historyBySession.map((session, i) => (
-              <div key={i} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">{session.date}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    Parts: {Array.from(session.parts).sort().join(", ")} • {session.entries.length} attempts
-                  </p>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <p className="text-sm font-bold text-brand-600 dark:text-brand-400">{session.avgScore.toFixed(1)}</p>
-                    <p className="text-[10px] text-gray-400 uppercase">avg score</p>
+            // show only 3 latest sessions on main view
+            historyBySession.slice(0, 3).map((session, i) => (
+              <div key={i} className="rounded-2xl border border-gray-200 bg-gray-50/70 p-4 shadow-sm dark:border-gray-800 dark:bg-white/[0.02]">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-800 dark:text-white/90">{session.date}</p>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Parts: {Array.from(session.parts).sort().join(", ")} • {session.entries.length} attempts
+                    </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const targetUnit = session.entries?.[0]?.unit_index ?? 1;
-                      const targetPart = session.entries?.[0]?.part_index ?? 1;
-                      setHistoryDetailModal({
-                        open: true,
-                        unit_index: targetUnit,
-                        part_index: targetPart
-                      });
-                    }}
-                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800 cursor-pointer"
-                  >
-                    Detail
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-brand-600 dark:text-brand-400">{session.avgScore.toFixed(1)}</p>
+                      <p className="text-[10px] text-gray-400 uppercase">avg score</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedSessionDate(session.date);
+                        setSelectedHistoryPart("all");
+                        const targetUnit = session.entries?.[0]?.unit_index ?? 1;
+                        const targetPart = session.entries?.[0]?.part_index ?? 1;
+                        setHistoryDetailModal({
+                          open: true,
+                          unit_index: targetUnit,
+                          part_index: targetPart
+                        });
+                      }}
+                      className="rounded-full border border-gray-200 bg-white px-4 py-2 text-xs font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800 cursor-pointer"
+                    >
+                      See detail
+                    </button>
+                  </div>
                 </div>
               </div>
             ))
           )}
+
+{historyBySession.length > 3 && (
+  <div className="mt-4 flex justify-end">
+    {/* 🔑 Menggunakan teks biasa (span), bukan button kaku */}
+    <span
+      onClick={() => {
+        const recent = historyBySession[0];
+        if (recent) {
+          setSelectedSessionDate(recent.date);
+          setSelectedHistoryPart("all");
+          setHistoryDetailModal({ 
+            open: true, 
+            unit_index: recent.entries?.[0]?.unit_index ?? 1, 
+            part_index: recent.entries?.[0]?.part_index ?? 1 
+          });
+        }
+      }}
+      className="text-sm font-semibold text-#C95B5B hover:text-red-600 hover:underline cursor-pointer transition-colors"
+    >
+      See all sessions 
+    </span>
+  </div>
+)}
         </div>
       </div>
 
       {/* 🔴 AI FEEDBACK BOX + THEMED PDF (WARNA MERAH MAROON & ORANGE ELEGAN) */}
-      <div className="rounded-2xl border border-red-200 bg-red-50/50 p-5 dark:border-red-500/20 dark:bg-red-500/5 mt-4">
+      <div className="rounded-2xl border border-brand-200 bg-brand-50/50 p-5 dark:border-brand-500/20 dark:bg-brand-500/5 mt-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-#C95B5B dark:text-red-300">AI Feedback Section</h3>
-            <p className="text-xs text-red-600 dark:text-red-400">Generated from your latest band and trend.</p>
+            <p className="text-xs text-brand-700 dark:text-brand-400">Generated from your latest band and trend.</p>
           </div>
           <button
             type="button"
@@ -1395,14 +1388,14 @@ export default function RoleOverviewPanel({
                 printWindow.document.close();
               }
             }}
-            className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 transition cursor-pointer"
+             className="rounded-lg bg-brand-500 px-3 py-1 text-xs font-medium text-white hover:bg-brand-600 transition cursor-pointer"
           >
             Download PDF Report
           </button>
         </div>
         <div className="mt-3">
-          <p className="text-xs font-bold text-red-800 dark:text-red-400 uppercase tracking-wider">Latest Review</p>
-          <ul className="mt-1 space-y-2 list-disc list-inside text-sm text-red-900/80 dark:text-gray-300">
+          <p className="text-xs font-bold text-brand-800 dark:text-brand-400 uppercase tracking-wider">Latest Review</p>
+          <ul className="mt-1 space-y-2 list-disc list-inside text-sm text-gray-700 dark:text-gray-300">
             {aiFeedback.map((point, i) => (
               <li key={i}>{point}</li>
             ))}
@@ -1448,130 +1441,184 @@ export default function RoleOverviewPanel({
       </div>
       {/* ==================== 🔴 SEKSI MODAL DETAIL EVALUASI (COMBINATION: CARDS + TABS FILTER LOGS) ==================== */}
       {historyDetailModal.open && (() => {
-        // 1. Ambil semua baris data dari database untuk unit yang dipilih
         const targetedRows = historyRows.filter(
-          (row) => row.unit_index === historyDetailModal.unit_index
+          (row) => new Date(row.recorded_at).toLocaleDateString() === selectedSession?.date
         );
 
-        // 2. Fungsi hitung statistik rata-rata untuk 3 Card di atas
+        const rowsByPart = (partIndex: number | "all") => {
+          if (partIndex === "all") return targetedRows;
+          return targetedRows.filter((row) => row.part_index === partIndex);
+        };
+
+        const filteredLogs = rowsByPart(selectedHistoryPart).sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+
         const getPartStats = (pIndex: number) => {
           const partRows = targetedRows.filter((r) => r.part_index === pIndex);
-          const attempts = partRows.length;
           const scores = partRows.map((r) => formatBand(r.score) || 0);
           const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-          return { attempts, avg };
+          return { attempts: partRows.length, avg: Number(avg.toFixed(1)) };
         };
 
         const part1 = getPartStats(1);
         const part2 = getPartStats(2);
         const part3 = getPartStats(3);
 
-        // 3. Hitung total akumulasi rata-rata (Overall Sesi)
-        const allScores = targetedRows.map((r) => formatBand(r.score) || 0);
-        const overallAvg = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+        const overallScores = targetedRows.map((r) => formatBand(r.score) || 0);
+        const overallAvg = overallScores.length > 0 ? overallScores.reduce((a, b) => a + b, 0) / overallScores.length : 0;
 
-        // Filter log pengerjaan di bagian bawah sesuai tab part yang aktif
-        const filteredLogs = targetedRows
-          .filter((row) => row.part_index === activeTab)
-          .sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+        const chartMax = Math.max(9, ...selectedSessionChartBars.map((bar) => bar.value), 1);
+
+        const chartOptions: ApexOptions = {
+          chart: {
+            toolbar: { show: false },
+            animations: { enabled: true },
+            zoom: { enabled: false },
+          },
+          plotOptions: {
+            bar: {
+              borderRadius: 8,
+              horizontal: false,
+              columnWidth: '34%',
+            },
+          },
+          dataLabels: { enabled: false },
+          colors: ['#C95B5B'],
+          xaxis: {
+            categories: selectedSessionChartBars.map((b) => `P${b.label}`),
+            labels: { rotate: -45, style: { fontSize: '12px' } },
+            axisBorder: { show: false },
+            axisTicks: { show: false },
+          },
+          yaxis: {
+            min: 0,
+            max: Math.max(9, chartMax),
+            tickAmount: 5,
+            labels: { formatter: (v) => `${Number(v).toFixed(0)}` },
+          },
+          tooltip: {
+            y: { formatter: (v) => `${Number(v).toFixed(1)} band` },
+          },
+          grid: { show: false },
+        };
+
+        const chartSeries = [{ name: 'Band', data: selectedSessionChartBars.map((b) => b.value) }];
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in">
-            <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl dark:bg-gray-900 ring-1 ring-gray-200 dark:ring-gray-800">
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in">
+            <div className="flex max-h-[92vh] w-[min(96vw,1100px)] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-800">
 
               {/* Header Modal */}
-              <div className="flex items-start justify-between border-b border-gray-100 pb-4 dark:border-gray-800">
+              <div className="flex items-start justify-between border-b border-gray-100 px-6 py-5 dark:border-gray-800">
                 <div>
                   <h3 className="text-lg font-bold text-gray-950 dark:text-white">Practice Session Breakdown</h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Detailed analysis and average bandwidth for Unit {historyDetailModal.unit_index}
+                    Detail score per tanggal with filter and chart.
                   </p>
                 </div>
                 <div className="text-right">
-                  <span className="inline-block rounded-xl bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 dark:bg-red-500/10 dark:text-red-400">
+                  <span className="inline-block rounded-xl bg-brand-50 px-3 py-1.5 text-xs font-bold text-brand-700 dark:bg-brand-500/10 dark:text-brand-400">
                     Overall Avg: {overallAvg.toFixed(1)}
                   </span>
                 </div>
               </div>
 
-              {/* SECTION 1: Grid 3 Kolom Card (Part 1, 2, 3 + Average) */}
-              <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                {/* CARD PART 1 */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(1)}
-                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 1
-                    ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
-                    : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
-                    }`}
-                >
-                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 1</p>
-                  <div className="my-2">
-                    <span className="text-2xl font-extrabold text-gray-900 dark:text-white">
-                      {part1.attempts > 0 ? part1.avg.toFixed(1) : "-"}
-                    </span>
-                    {part1.attempts > 0 && <span className="text-xs text-gray-400 font-medium"> band</span>}
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+              <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+                <div className="h-fit rounded-2xl border border-gray-100 bg-gray-50/60 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Date Filter</p>
+                  <div className="mt-3 space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                    {historyBySession.map((session) => (
+                      <button
+                        key={session.date}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSessionDate(session.date);
+                          setSelectedHistoryPart("all");
+                        }}
+                        className={`w-full rounded-2xl border px-3 py-3 text-left transition ${selectedSession?.date === session.date ? "border-brand-500 bg-brand-50 text-brand-700" : "border-gray-200 bg-white text-gray-700 hover:border-gray-300"}`}
+                      >
+                        <p className="text-sm font-semibold">{session.date}</p>
+                        <p className="mt-1 text-xs opacity-70">{session.entries.length} attempts • avg {session.avgScore.toFixed(1)}</p>
+                      </button>
+                    ))}
                   </div>
-                  <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">
-                    {part1.attempts} {part1.attempts === 1 ? 'Attempt' : 'Attempts'}
-                  </p>
-                </button>
+                </div>
 
-                {/* CARD PART 2 */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(2)}
-                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 2
-                    ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
-                    : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
-                    }`}
-                >
-                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 2</p>
-                  <div className="my-2">
-                    <span className="text-2xl font-extrabold text-gray-900 dark:text-white">
-                      {part2.attempts > 0 ? part2.avg.toFixed(1) : "-"}
-                    </span>
-                    {part2.attempts > 0 && <span className="text-xs text-gray-400 font-medium"> band</span>}
+                <div className="min-w-0 space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                      <p className="text-xs uppercase tracking-wide text-gray-400">Selected Date</p>
+                      <p className="mt-2 text-lg font-semibold text-gray-900 dark:text-white">{selectedSession?.date ?? "-"}</p>
+                    </div>
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                      <p className="text-xs uppercase tracking-wide text-gray-400">Attempts</p>
+                      <p className="mt-2 text-lg font-semibold text-gray-900 dark:text-white">{selectedSessionStats.count}</p>
+                    </div>
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                      <p className="text-xs uppercase tracking-wide text-gray-400">Avg Score</p>
+                      <p className="mt-2 text-lg font-semibold text-gray-900 dark:text-white">{selectedSessionStats.hasData ? selectedSessionStats.avg.toFixed(1) : "-"}</p>
+                    </div>
                   </div>
-                  <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">
-                    {part2.attempts} {part2.attempts === 1 ? 'Attempt' : 'Attempts'}
-                  </p>
-                </button>
 
-                {/* CARD PART 3 */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(3)}
-                  className={`rounded-2xl border p-4 text-center transition cursor-pointer ${activeTab === 3
-                    ? "border-red-500 bg-red-50/30 dark:bg-red-950/10"
-                    : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"
-                    }`}
-                >
-                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 3</p>
-                  <div className="my-2">
-                    <span className="text-2xl font-extrabold text-gray-900 dark:text-white">
-                      {part3.attempts > 0 ? part3.avg.toFixed(1) : "-"}
-                    </span>
-                    {part3.attempts > 0 && <span className="text-xs text-gray-400 font-medium"> band</span>}
+                  <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900 dark:text-white">Score Trend</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Bar chart for the selected date.</p>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs">
+                        {["all", 1, 2, 3].map((part) => (
+                          <button
+                            key={String(part)}
+                            type="button"
+                            onClick={() => setSelectedHistoryPart(part as number | "all")}
+                            className={`rounded-full px-3 py-1 font-semibold ${selectedHistoryPart === part ? "bg-brand-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                          >
+                            {part === "all" ? "All Parts" : `Part ${part}`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl bg-gray-50 p-4">
+                      {selectedSessionChartBars.length === 0 ? (
+                        <div className="h-56 flex items-center justify-center text-sm text-gray-500">No score available for this date.</div>
+                      ) : (
+                        <Chart options={chartOptions} series={chartSeries} type="bar" height={220} />
+                      )}
+                    </div>
                   </div>
-                  <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">
-                    {part3.attempts} {part3.attempts === 1 ? 'Attempt' : 'Attempts'}
-                  </p>
-                </button>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <button type="button" onClick={() => setSelectedHistoryPart(1)} className={`rounded-2xl border p-4 text-center transition ${selectedHistoryPart === 1 ? "border-brand-500 bg-brand-50/30 dark:bg-brand-950/10" : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"}`}>
+                      <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 1</p>
+                      <div className="my-2"><span className="text-2xl font-extrabold text-gray-900 dark:text-white">{part1.attempts > 0 ? part1.avg.toFixed(1) : "-"}</span></div>
+                      <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">{part1.attempts} Attempt{part1.attempts === 1 ? "" : "s"}</p>
+                    </button>
+                    <button type="button" onClick={() => setSelectedHistoryPart(2)} className={`rounded-2xl border p-4 text-center transition ${selectedHistoryPart === 2 ? "border-brand-500 bg-brand-50/30 dark:bg-brand-950/10" : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"}`}>
+                      <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 2</p>
+                      <div className="my-2"><span className="text-2xl font-extrabold text-gray-900 dark:text-white">{part2.attempts > 0 ? part2.avg.toFixed(1) : "-"}</span></div>
+                      <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">{part2.attempts} Attempt{part2.attempts === 1 ? "" : "s"}</p>
+                    </button>
+                    <button type="button" onClick={() => setSelectedHistoryPart(3)} className={`rounded-2xl border p-4 text-center transition ${selectedHistoryPart === 3 ? "border-brand-500 bg-brand-50/30 dark:bg-brand-950/10" : "border-gray-100 bg-gray-50/50 dark:border-gray-800 dark:bg-white/[0.01]"}`}>
+                      <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Part 3</p>
+                      <div className="my-2"><span className="text-2xl font-extrabold text-gray-900 dark:text-white">{part3.attempts > 0 ? part3.avg.toFixed(1) : "-"}</span></div>
+                      <p className="text-[10px] font-medium text-gray-500 bg-white dark:bg-gray-800 py-0.5 px-2 rounded-full inline-block border border-gray-100 dark:border-gray-700">{part3.attempts} Attempt{part3.attempts === 1 ? "" : "s"}</p>
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              {/* SECTION 2: Filtered Logs Section Heading */}
               <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-4 dark:border-gray-800">
                 <p className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                  Detailed Session History — Part {activeTab}
+                  Detailed Session History — {selectedSession?.date ?? "No date selected"}
                 </p>
                 <p className="text-[10px] text-gray-400 font-medium">Click an attempt row to open result page</p>
               </div>
 
-              {/* SECTION 3: Penjabaran List Sesi Hasil Filter */}
-              <div className="mt-3 max-h-[180px] overflow-y-auto space-y-2 pr-1">
+              <div className="mt-3 max-h-[220px] overflow-y-auto space-y-2 pr-1">
                 {filteredLogs.length === 0 ? (
-                  <p className="text-xs text-gray-500 text-center py-6">No practice session records found for Part {activeTab}.</p>
+                  <p className="text-xs text-gray-500 text-center py-6">No practice session records found for this filter.</p>
                 ) : (
                   filteredLogs.map((record) => {
                     const recordDate = new Date(record.recorded_at);
@@ -1586,7 +1633,7 @@ export default function RoleOverviewPanel({
                           setHistoryDetailModal({ open: false, unit_index: null, part_index: null });
                           router.push(`/learn/result?id=${record.id}`);
                         }}
-                        className="w-full flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/40 p-2.5 text-left transition hover:border-red-300 hover:bg-red-50/20 dark:border-gray-800 dark:bg-white/[0.01] dark:hover:border-red-900/40 cursor-pointer group"
+                        className="w-full flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/40 p-2.5 text-left transition hover:border-brand-300 hover:bg-brand-50/20 dark:border-gray-800 dark:bg-white/[0.01] dark:hover:border-brand-900/40 cursor-pointer group"
                       >
                         <div className="flex items-center gap-3">
                           <div className="text-[11px] font-medium text-gray-400 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 px-2 py-0.5 rounded-md">
@@ -1597,10 +1644,10 @@ export default function RoleOverviewPanel({
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="rounded-lg bg-red-50 px-2 py-0.5 text-xs font-bold text-red-600 dark:bg-red-500/10 dark:text-red-400">
+                          <span className="rounded-lg bg-brand-50 px-2 py-0.5 text-xs font-bold text-brand-700 dark:bg-brand-500/10 dark:text-brand-400">
                             Band {(formatBand(record.score) ?? 0).toFixed(1)}
                           </span>
-                          <span className="text-[10px] text-gray-400 group-hover:text-red-500 transition font-medium">→</span>
+                          <span className="text-[10px] text-gray-400 group-hover:text-red-500 transition font-medium"></span>
                         </div>
                       </button>
                     );
@@ -1609,7 +1656,7 @@ export default function RoleOverviewPanel({
               </div>
 
               {/* Footer Modal Controls */}
-              <div className="mt-5 flex justify-end border-t border-gray-100 pt-3 dark:border-gray-800">
+              <div className="mt-5 flex justify-end border-t border-gray-100 px-6 pb-5 pt-3 dark:border-gray-800">
                 <button
                   type="button"
                   onClick={() => setHistoryDetailModal({ open: false, unit_index: null, part_index: null })}
@@ -1619,6 +1666,7 @@ export default function RoleOverviewPanel({
                 </button>
               </div>
 
+              </div>
             </div>
           </div>
         );

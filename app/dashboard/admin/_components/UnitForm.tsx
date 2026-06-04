@@ -183,6 +183,7 @@ export default function UnitForm({
         setPrice(sessionData.price ? String(sessionData.price) : "");
 
         setIsActive(!!sessionData.is_active);
+        setIsPublic(!!sessionData.is_public);
 
         // 🔥 2. LOAD TOPICS
         const { data: topicsData, error: topicsError } = await supabase

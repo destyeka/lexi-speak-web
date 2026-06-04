@@ -107,7 +107,7 @@ export default function UserMetaCard({ name, roleLabel, location = "-" }: UserMe
       return;
     }
 
-    const { data: publicUrlData, error: publicUrlError } = await supabase.storage
+    const { data: publicUrlData } = supabase.storage
       .from("avatars")
       .getPublicUrl(filePath);
 

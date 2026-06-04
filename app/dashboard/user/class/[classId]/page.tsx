@@ -24,6 +24,7 @@ interface Submission {
   status: string;
   started_at: string | null;
   submitted_at: string | null;
+  score: number | null;
 }
 
 export default function StudentClassAssignmentPage() {
@@ -236,9 +237,29 @@ export default function StudentClassAssignmentPage() {
                         <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Started</p>
                         <p className="mt-2 font-medium text-slate-900">{formatDate(submission.started_at)}</p>
                       </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Submitted</p>
-                        <p className="mt-2 font-medium text-slate-900">{formatDate(submission.submitted_at)}</p>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 flex justify-between items-center">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Submitted</p>
+                          <p className="mt-2 font-medium text-slate-900">{formatDate(submission.submitted_at)}</p>
+                        </div>
+  {submission.score !== null && (
+  <div className="text-right flex items-center gap-3">
+    <span className="inline-block rounded-xl bg-brand-50 px-3 py-1 text-sm font-bold text-brand-600 border border-brand-100">
+      Band {submission.score}
+    </span>
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        // ✅ UBAH DISINI: Arahkan ke rute detail dashboard yang sudah diperbaiki kodenya
+        window.open(`/learn/result?assignmentId=${submission.assignment_id}`, '_blank');
+      }}
+      className="rounded-lg bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+    >
+      Detail
+    </button>
+  </div>
+)}
                       </div>
                     </div>
                   ) : null}

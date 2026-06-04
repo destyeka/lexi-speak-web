@@ -9,6 +9,7 @@ type PracticeProgressPayload = {
   last_unit_index: number | null;
   last_part_index: number;
   notes: string | null;
+  recommendation?: string | null;
   metrics: Array<{
     id: string;
     label: string;
@@ -24,6 +25,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
+    // 🌟 FIX UTAMA BACKEND: Baris ini jangan sampai hilang cok!
     const authorization = request.headers.get("authorization") || "";
     const accessToken = authorization.toLowerCase().startsWith("bearer ")
       ? authorization.slice(7).trim()
@@ -43,12 +45,17 @@ export async function POST(request: Request) {
         ? null
         : Number(body.last_unit_index);
     const lastPartIndex = Number(body.last_part_index);
-    const notes = body.notes ?? null;
+    
+    // Perangkap aman penangkap 'notes' atau 'recommendation' dari frontend page learn
+    const notes = body.notes || (body as any).recommendation || null;
     const metrics = Array.isArray(body.metrics) ? body.metrics : [];
+    
     console.log(
       "API RECEIVED METRICS",
       JSON.stringify(metrics, null, 2)
     );
+    console.log("👉 ISI BODY DARI PAGE LEARN:", JSON.stringify(body, null, 2));
+    
     const assignmentId = typeof body.assignment_id === "string" ? body.assignment_id : null;
     const analysis = body.analysis && typeof body.analysis === "object" ? body.analysis : null;
     const attemptType = body.attempt_type === "test" ? "test" : "practice";
@@ -80,20 +87,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Only student accounts can record practice progress" }, { status: 403 });
     }
 
-    const { error: rpcError } = await supabase.rpc("record_student_practice_progress", {
-      latest_score: latestScore,
-      progress_percent: progressPercent,
-      speaking_attempts: attemptIncrement,
-      last_activity_at: lastActivityAt,
-      last_unit_index: lastUnitIndex,
-      last_part_index: lastPartIndex,
-      notes,
-      metrics,
-      assignment_id: assignmentId,
-      analysis,
-      attempt_type: attemptType,
-    });
-
+    // Eksekusi fungsi RPC database dengan parameter asli
+ // 🌟 GANTI STRUGNYA DI SINI COK, SESUAIKAN SAMA NAMA FUNGSI BARU KITA!
+const { error: rpcError } = await supabase.rpc("save_student_practice_progress", {
+  latest_score: latestScore,
+  progress_percent: progressPercent,
+  speaking_attempts: attemptIncrement,
+  last_activity_at: lastActivityAt,
+  last_unit_index: lastUnitIndex,
+  last_part_index: lastPartIndex,
+  notes,
+  metrics,
+  assignment_id: assignmentId,
+  analysis,
+  attempt_type: attemptType,
+});
     if (!rpcError) {
       console.log("RPC SUCCESS");
       return NextResponse.json({ ok: true, mode: "rpc" });
@@ -101,6 +109,9 @@ export async function POST(request: Request) {
 
     console.log("RPC FAILED", rpcError);
 
+    // ==========================================
+    // JALUR FALLBACK JIKA RPC GAGAL (KODE CADANGAN)
+    // ==========================================
     const { data: existingProgress, error: progressReadError } = await supabase
       .from("student_progress")
       .select("speaking_attempts")
@@ -133,10 +144,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: progressWriteError.message }, { status: 500 });
     }
 
-    // If assignmentId is provided, also upsert the assignment_submissions row
     if (assignmentId) {
       try {
-        // Use recorded_at from student_score_history if available to avoid timestamp regressions
         let submittedAt = new Date().toISOString();
         try {
           const { data: latestScoreRow, error: scoreError } = await supabase
@@ -167,6 +176,7 @@ export async function POST(request: Request) {
               analysis,
             },
           ], { onConflict: "assignment_id,student_id" });
+          
         if (submissionError) {
           const msg = String(submissionError.message || submissionError);
           if (msg.includes("column \"analysis\" does not exist") || msg.includes("42703")) {

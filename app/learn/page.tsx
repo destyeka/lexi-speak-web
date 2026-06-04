@@ -66,6 +66,7 @@ interface ResultPageProps {
   unitIndex: number | null;
   partIndex: number;
   mode?: "learn" | "test" | null;
+  assignmentId?: string | null;
 }
 
 interface MetricData {
@@ -635,7 +636,7 @@ export default function LexaPracticeSession() {
   const currentTranscript = page.startsWith("part2") ? transcriptPart2 : page.startsWith("part3") ? transcriptPart3 : transcriptPart1;
   const hasSpoken = Boolean(currentTranscript.trim() || liveTranscript.trim() || interimTranscript.trim());
 
-  const isAssignmentResultPage = isAssignment && [PAGES.RESULT, PAGES.PART2_RESULT, PAGES.PART3_RESULT].includes(page);
+  const isAssignmentResultPage = isAssignment && ([PAGES.RESULT, PAGES.PART2_RESULT, PAGES.PART3_RESULT] as PageValue[]).includes(page);
   const isAssignmentLocked = isAssignment && assignmentActionStatus === "submitted";
 
   const getCurrentAssignmentTopic = () => {
@@ -804,12 +805,12 @@ export default function LexaPracticeSession() {
             setTranscriptPart1((prev) => prev === joined ? prev : joined);
           }} />
         )}
-        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} />}
+        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} assignmentId={assignmentId} />}
         {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
         {page === PAGES.PART2_SESSION && (
           <SessionPagePart2 isRecording={isRecording} setIsRecording={setIsRecording} transcript={transcriptPart2} setTranscript={setTranscriptPart2} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} recError={recError} setRecError={setRecError} isListening={isListening} topic={part2Topic} bullets={part2Bullets} isLoading={isTopicsLoading} />
         )}
-        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} />}
+        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} assignmentId={assignmentId} />}
         {page === PAGES.PART3_INTRO && (
           <IntroPagePart3
             topic={part3Topic}
@@ -823,7 +824,7 @@ export default function LexaPracticeSession() {
             setTranscriptPart3((prev) => prev === joined ? prev : joined);
           }} />
         )}
-        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} />}
+        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} assignmentId={assignmentId} />}
       </main>
 
       {/* Footer Utama */}
@@ -1569,7 +1570,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   );
 }
 
-function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }: ResultPageProps) {
+function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, assignmentId }: ResultPageProps) {
   const [evaluation, setEvaluation] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -1648,145 +1649,111 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
     };
   }, [partLabel, rubricItems, topic?.prompt, topic?.title, transcript]);
 
-  useEffect(() => {
+useEffect(() => {
     let cancelled = false;
 
     const loadTestSummary = async () => {
-      if (mode !== "test" || partIndex !== 3 || !unitIndex || !evaluation || analysisLoading || !transcript.trim()) {
+      // 1. Ambil data user auth resmi langsung di sini biar ga ada error 'userData' undefined
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user?.id) {
+        console.log("❌ Gagal mendapatkan ID user dari auth Supabase");
+        return;
+      }
+      const currentUserId = authData.user.id;
+
+      // 2. Tahan simpan jika ulasan teks panjang dari AI belum siap masuk state
+      if (analysisLoading || !evaluation || !evaluation.analysis) {
+        console.log("⏳ Menunggu AI selesai menyusun ulasan teks panjang...");
         return;
       }
 
-      const latestPart3Score = Number(evaluation.overall);
-      if (!Number.isFinite(latestPart3Score)) {
-        return;
-      }
+      if (hasSavedFinalSummaryRef.current) return;
+      hasSavedFinalSummaryRef.current = true;
 
       setFinalTestLoading(true);
       setFinalTestError(null);
 
+      let finalPart1 = 0;
+      let finalPart2 = 0;
+      let finalPart3 = 0;
+      let finalOverall = 0;
+
       try {
-        const { data: userData, error: userError } = await supabase.auth.getUser();
-        if (cancelled) return;
-
-        if (userError || !userData.user) {
-          setFinalTestError("Silakan login ulang agar skor akhir test bisa diproses.");
-          return;
-        }
-
+        console.log("📊 MEMBACA HISTORI NILAI PART SEBELUMNYA...");
         const { data: historyRows, error: historyError } = await supabase
           .from("student_score_history")
-          .select("score, part_index, unit_index, recorded_at, metrics")
-          .eq("student_id", userData.user.id)
+          .select("score, part_index, metrics")
+          .eq("student_id", currentUserId)
           .eq("unit_index", unitIndex)
+          .eq("attempt_type", "test")
+          .is("assignment_id", null)
           .order("recorded_at", { ascending: false });
 
-        if (cancelled) return;
+        if (historyError) throw historyError;
 
-        if (historyError) {
-          setFinalTestError(historyError.message);
-          return;
-        }
-
-        type HistoryMetric = {
-          label?: string;
-          score?: number | string;
-          text?: string;
-        };
-
-        type HistoryRow = {
-          score: number;
-          part_index: number | null;
-          metrics?: HistoryMetric[] | null;
-        };
-
+        const latestPart3Score = Number(evaluation.overall);
         const latestPartScores = new Map<number, number>([[3, latestPart3Score]]);
-        const partDetails: Array<{
-          label: string;
-          score: number;
-          description: string;
-          evaluation: string;
-          components: Array<{ label: string; score: string; description: string }>;
-        }> = [];
-
-        (historyRows as HistoryRow[] | null ?? []).forEach((row) => {
+        
+        (historyRows || []).forEach((row) => {
           const rowPartIndex = row.part_index;
           if ((rowPartIndex === 1 || rowPartIndex === 2) && !latestPartScores.has(rowPartIndex)) {
             latestPartScores.set(rowPartIndex, Number(row.score));
           }
-
-          if (rowPartIndex === 1 || rowPartIndex === 2 || rowPartIndex === 3) {
-            const partLabel = `Part ${rowPartIndex}`;
-            const partScore = Number(row.score);
-            const componentMetrics = Array.isArray(row.metrics)
-              ? row.metrics
-                .map((metric) => ({
-                  label: metric.label ?? "Component",
-                  score: metric.score !== undefined && metric.score !== null ? String(metric.score) : "-",
-                  description: metric.text ?? "",
-                }))
-                .filter((metric) => metric.label !== "Component" || metric.score !== "-")
-              : [];
-
-            if (!partDetails.some((item) => item.label === partLabel)) {
-              partDetails.push({
-                label: partLabel,
-                score: Number.isFinite(partScore) ? Number(partScore.toFixed(1)) : 0,
-                description: rowPartIndex === 1
-                  ? "Short-answer warm-up section."
-                  : rowPartIndex === 2
-                    ? "Cue card / long turn section."
-                    : "Follow-up discussion section.",
-                evaluation: componentMetrics.length > 0
-                  ? `${partLabel} evaluation is based on the saved component scores below.`
-                  : `${partLabel} evaluation is based on the part score only.`,
-                components: componentMetrics,
-              });
-            }
-          }
         });
 
-        const part1 = latestPartScores.get(1);
-        const part2 = latestPartScores.get(2);
-        const part3 = latestPartScores.get(3);
-
-        if (part1 === undefined || part2 === undefined || part3 === undefined) {
-          setFinalTestError("Skor final belum lengkap karena salah satu part belum tersimpan.");
-          return;
-        }
-
-        const overall = Number(((part1 + part2 + part3) / 3).toFixed(1));
+        finalPart1 = latestPartScores.get(1) ?? 0;
+        finalPart2 = latestPartScores.get(2) ?? 0;
+        finalPart3 = latestPartScores.get(3) ?? 0;
+        
+        const validScores = [finalPart1, finalPart2, finalPart3].filter((s) => s > 0);
+        finalOverall = validScores.length > 0 ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 0;
 
         if (!cancelled) {
-          setFinalTestSummary({ overall, part1, part2, part3 });
-          setFinalTestPartDetails(
-            partDetails.sort((a, b) => Number(a.label.replace(/[^0-9]/g, "")) - Number(b.label.replace(/[^0-9]/g, "")))
-          );
+          setFinalTestSummary({ overall: finalOverall, part1: finalPart1, part2: finalPart2, part3: finalPart3 });
         }
 
-        if (!hasSavedFinalSummaryRef.current) {
-          const { error: insertError } = await supabase.from("student_score_history").insert({
-            student_id: userData.user.id,
-            score: overall,
-            metrics: [
-              { id: "part1", label: "Part 1 Score", score: part1, text: "Final test summary" },
-              { id: "part2", label: "Part 2 Score", score: part2, text: "Final test summary" },
-              { id: "part3", label: "Part 3 Score", score: part3, text: "Final test summary" },
-            ],
-            speaking_attempts: 0,
-            unit_index: unitIndex,
-            part_index: null,
-            recorded_at: new Date().toISOString(),
-            recorded_by: userData.user.id,
-            attempt_type: "test",
-          });
+        const currentPart3Metrics = Array.isArray(evaluation?.metrics) ? evaluation.metrics : [];
+        const mappedPart3Metrics = currentPart3Metrics.map((m: any) => ({
+          id: `part3_${m.id || "metric"}`,
+          label: `Part 3 - ${m.label || "Criteria"}`,
+          score: m.score,
+          text: m.text || ""
+        }));
 
-          if (insertError) {
-            setFinalTestError(insertError.message);
-            return;
-          }
+        const safeMetricsPayload = JSON.parse(
+          JSON.stringify([
+            { id: "part1", label: "Part 1 Score", score: finalPart1, text: "Final test summary" },
+            { id: "part2", label: "Part 2 Score", score: finalPart2, text: "Final test summary" },
+            { id: "part3", label: "Part 3 Score", score: finalPart3, text: "Final test summary" },
+            ...(Array.isArray(mappedPart3Metrics) ? mappedPart3Metrics : [])
+          ])
+        );
 
-          hasSavedFinalSummaryRef.current = true;
+        console.log("🚀 EKSEKUSI INSERT DATA KE SUPABASE...");
+        const { error: insertError } = await supabase.from("student_score_history").insert({
+          student_id: currentUserId,
+          score: finalOverall,
+          metrics: safeMetricsPayload,
+          analysis: JSON.parse(JSON.stringify({ text: evaluation.analysis })),
+          notes: evaluation.recommendation || "Final test summary processed.",
+          speaking_attempts: 0,
+          unit_index: unitIndex,
+          part_index: null, 
+          recorded_at: new Date().toISOString(),
+          recorded_by: currentUserId,
+          attempt_type: "test",
+          assignment_id: assignmentId ?? null,
+        });
+
+        if (insertError) throw insertError;
+        console.log("✅ FIX BERHASIL! DATA UTUH MASUK SUPABASE!");
+
+      } catch (err: any) {
+        console.error("❌ ERROR DI LOAD TEST SUMMARY:", err);
+        if (!cancelled) {
+          setFinalTestError(err.message || "Gagal memproses skor akhir.");
         }
+        hasSavedFinalSummaryRef.current = false;
       } finally {
         if (!cancelled) {
           setFinalTestLoading(false);
@@ -1794,13 +1761,15 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
       }
     };
 
-    void loadTestSummary();
+    const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
+    if (isFinalTestResult) {
+      void loadTestSummary();
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [analysisLoading, evaluation, mode, partIndex, transcript, unitIndex]);
-
+  }, [analysisLoading, evaluation, mode, partIndex, transcript, unitIndex, finalTestSummary]);
   useEffect(() => {
     const persistResult = async () => {
       if (analysisLoading || !evaluation || !transcript.trim() || hasSavedRef.current) {
@@ -1862,9 +1831,11 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
           last_activity_at: new Date().toISOString(),
           last_unit_index: unitIndex,
           last_part_index: partIndex,
+          analysis: JSON.parse(JSON.stringify({ text: evaluation.analysis })),
           notes: evaluation.recommendation ?? null,
           metrics: metricPayload,
           attempt_type: "test",
+          assignment_id: assignmentId ?? null,
         }),
       });
 
@@ -1899,30 +1870,33 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode }
     analysis: "AI analysis will appear after the transcript is processed.",
   };
 
-  const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
+const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
   let testScoreData: EvaluationResult | null = null;
   if (isFinalTestResult && finalTestSummary) {
     testScoreData = {
-      overall: finalTestSummary.overall.toFixed(1),
-      level: `Final Test Band ${finalTestSummary.overall.toFixed(1)}`,
+      // Ambil overallScore dari JSON lu (pake fallback ke finalTestSummary kalau kosong)
+      overall: evaluation?.overallScore || finalTestSummary.overall.toFixed(1),
+      level: evaluation?.level || `Final Test Band ${finalTestSummary.overall.toFixed(1)}`,
       metrics: [
         { id: "part1", label: "Part 1", score: finalTestSummary.part1.toFixed(1), text: "Included in the final average." },
         { id: "part2", label: "Part 2", score: finalTestSummary.part2.toFixed(1), text: "Included in the final average." },
         { id: "part3", label: "Part 3", score: finalTestSummary.part3.toFixed(1), text: "Included in the final average." },
       ],
-      recommendation: "Ulangi test untuk membandingkan skor akhir terbaru.",
-      analysis: "Skor akhir test dihitung dari rata-rata Part 1, Part 2, dan Part 3.",
+      
+      // 🌟 SESUAIKAN DENGAN PROPERTI JSON LU:
+      recommendation: evaluation?.recommendation || "Ulangi test untuk membandingkan skor akhir terbaru.",
+      analysis: evaluation?.analysis || "Gagal memuat analisis AI.",
     };
   }
   const displayScoreData = testScoreData ?? scoreData;
   const testPartBreakdown = mode === "test" && partIndex === 3 && finalTestSummary && finalTestPartDetails
     ? finalTestPartDetails.map((part) => ({
-      label: part.label,
-      score: part.score.toFixed(1),
-      description: part.description,
-      evaluation: part.evaluation,
-      components: part.components,
-    }))
+        label: part.label,
+        score: part.score.toFixed(1),
+        description: part.description,
+        evaluation: part.evaluation,
+        components: part.components,
+      }))
     : undefined;
 
   return (
