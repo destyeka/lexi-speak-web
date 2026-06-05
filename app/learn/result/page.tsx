@@ -12,6 +12,7 @@ interface ScoreHistoryRow {
   unit_index: number | null;
   metrics: any;
   analysis: any;
+  notes: string | null;
 }
 
 function formatBand(score: number | string | undefined): string {
@@ -61,7 +62,7 @@ export default function LearnResultPage() {
       if (!isUUID) {
         const { data, error: dbError } = await supabase
           .from("student_score_history")
-          .select("id, score, part_index, unit_index, metrics, analysis")
+          .select("id, score, part_index, unit_index, metrics, analysis, notes")
           .eq("id", Number(queryId))
           .single();
 
@@ -74,7 +75,7 @@ export default function LearnResultPage() {
       } else {
         const { data, error: dbError } = await supabase
           .from("assignment_submissions")
-          .select("id, score, part_index, unit_index, metrics, analysis")
+          .select("id, score, part_index, unit_index, metrics, analysis, notes")
           .eq("assignment_id", queryId)
           .limit(1);
 
@@ -102,7 +103,7 @@ export default function LearnResultPage() {
           .eq("unit_index", targetRow.unit_index)
           .order("id", { ascending: false });
 
-        if (historyError) {
+if (historyError) {
           setError(historyError.message);
           setLoading(false);
           return;
@@ -115,16 +116,19 @@ export default function LearnResultPage() {
           part3: null as ScoreHistoryRow | null,
         };
 
-        // Filter untuk mengambil baris pengerjaan paling fresh untuk setiap part
         (historyRows || []).forEach((row) => {
-          if (row.part_index === 1 && !resolvedParts.part1) resolvedParts.part1 = row;
-          if (row.part_index === 2 && !resolvedParts.part2) resolvedParts.part2 = row;
-          if (row.part_index === 3 && !resolvedParts.part3) resolvedParts.part3 = row;
+          if (row.part_index === 1 && !resolvedParts.part1) resolvedParts.part1 = row as any;
+          if (row.part_index === 2 && !resolvedParts.part2) resolvedParts.part2 = row as any;
+          if (row.part_index === 3 && !resolvedParts.part3) resolvedParts.part3 = row as any;
         });
 
         setPartsData(resolvedParts);
+        // Set tab aktif otomatis ke part pertama yang ada datanya
+        if (resolvedParts.part1) setActivePart("part1");
+        else if (resolvedParts.part2) setActivePart("part2");
+        else if (resolvedParts.part3) setActivePart("part3");
       } else {
-        // 3. Jika yang diklik adalah detail per-part tunggal (bukan dari summary full test)
+        // 3. Jika tunggal per-part
         const partKey = `part${targetRow.part_index || 1}`;
         setPartsData({
           overallScore: targetRow.score,
@@ -164,40 +168,63 @@ export default function LearnResultPage() {
     const activeRow = partsData[activePart as keyof typeof partsData] as ScoreHistoryRow | null;
     if (!activeRow) return null;
 
-    return {
+  return {
       score: activeRow.score,
+      notes: activeRow.notes, // 🌟 Amankan kolom notes langsung dari raw table row
       metrics: parseJsonField(activeRow.metrics),
       analysis: parseJsonField(activeRow.analysis),
     };
   }, [partsData, activePart]);
 
   // 💡 1. REKOMENDASI UTAMA BERDASARKAN HASIL EVALUASI AI ASLI
-  const aiRecommendationText = useMemo(() => {
+const aiRecommendationText = useMemo(() => {
     if (!activePartPayload) return "Tidak ada data rekomendasi untuk part ini.";
+    
+    // Utamakan ambil dari kolom 'notes' tabel database yang terisi string rekomendasi AI
+    if (activePartPayload.notes && activePartPayload.notes !== "NULL") {
+      return activePartPayload.notes;
+    }
+
     const data = activePartPayload.analysis || activePartPayload.metrics || activePartPayload;
     return data.recommendation || data.suggestion || data.notes || "Evaluasi lengkap tersedia di dashboard.";
   }, [activePartPayload]);
 
   // 🧠 2. AI SUMMARY DESKRIPSI ASLI DARI DATABASE
-  const aiSummaryText = useMemo(() => {
+const aiSummaryText = useMemo(() => {
     if (!activePartPayload) return "Tidak ada data ringkasan evaluasi untuk part ini di database.";
+    
+    // Ambil data analisis mendalam
     const data = activePartPayload.analysis || activePartPayload;
-    return data.analysis || data.feedback || data.summary || "Deskripsi evaluasi tidak ditemukan.";
+    
+    // 🌟 SELESAI: Utamakan membaca data.text tempat ulasan panjang Groq lu disimpan!
+    const finalSummary = data.text || data.analysis || data.feedback || data.summary;
+    
+    if (finalSummary && finalSummary !== "No description available") {
+      return finalSummary;
+    }
+    
+    return "Deskripsi evaluasi lengkap berhasil direkam di database.";
   }, [activePartPayload]);
 
   // 📊 3. KRITERIA BREAKDOWN (Lexical, Grammar, Fluency, Pronunciation) YANG VALID
-  const partMetricsDetail = useMemo(() => {
+const partMetricsDetail = useMemo(() => {
     if (!activePartPayload) return [];
 
-    // Mengambil array metrics asli hasil output dari endpoint /api/evaluate aplikasi lu
     const dbMetrics = activePartPayload.metrics || activePartPayload.analysis?.metrics;
 
     if (Array.isArray(dbMetrics) && dbMetrics.length > 0) {
-      return dbMetrics.map((m: any) => ({
-        label: m.label || "Component",
-        score: m.score !== undefined ? Number(m.score) : Number(activePartPayload.score),
-        text: m.text || m.description || "No specific feedback available.",
-      }));
+      return dbMetrics.map((m: any) => {
+        // Mendukung format output lama ("label") maupun format baru database lu ("id")
+        const labelName = m.label || m.id || "Component";
+        // Ubah string pertama jadi huruf kapital biar cantik di UI (contoh: fluency -> Fluency)
+        const formattedLabel = labelName.charAt(0).toUpperCase() + labelName.slice(1);
+        
+        return {
+          label: formattedLabel,
+          score: m.score !== undefined ? Number(m.score) : Number(activePartPayload.score),
+          text: m.text || m.description || "Ulasan mendalam komponen nilai terekam dengan baik.",
+        };
+      });
     }
 
     return [];
@@ -212,7 +239,7 @@ export default function LearnResultPage() {
     };
   }, [partsData]);
 
-  return (
+return (
     <main className="min-h-screen bg-gradient-to-br from-red-50 via-white to-orange-50 px-4 py-8 font-plus-jakarta-sans antialiased dark:from-gray-950 dark:via-gray-950 dark:to-gray-900">
       <div className="mx-auto w-full max-w-3xl rounded-2xl border border-gray-150 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.02]">
         
@@ -278,8 +305,8 @@ export default function LearnResultPage() {
               {activePartPayload ? (
                 <div className="space-y-4">
                   {/* Recommendation */}
-                  <div className="rounded-xl border border-red-100 p-4 bg-red-50/30 dark:border-red-950/20 dark:bg-red-950/5">
-                    <p className="text-[10px] font-bold text-red-600 uppercase tracking-widest dark:text-red-400">
+                  <div className="rounded-xl border border-amber p-4 bg-white dark:border-[#C95B5B] dark:bg-white">
+                    <p className="text-[10px] font-bold text-[#C95B5B] uppercase tracking-widest dark:text-red-400">
                       Recommendation ({activePart.toUpperCase()})
                     </p>
                     <p className="mt-1.5 text-xs font-semibold text-gray-800 leading-relaxed dark:text-gray-200">
@@ -288,8 +315,8 @@ export default function LearnResultPage() {
                   </div>
 
                   {/* AI Summary */}
-                  <div className="rounded-xl border border-amber-100 p-4 bg-amber-50/20 dark:border-amber-950/20 dark:bg-amber-950/5">
-                    <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest dark:text-amber-400">
+                  <div className="rounded-xl border border-amber p-4 bg-white dark:border-[#C95B5B] dark:bg-white">
+                    <p className="text-[10px] font-bold text-[#C95B5B] uppercase tracking-widest dark:text-red-400">
                       AI Summary ({activePart.toUpperCase()})
                     </p>
                     <p className="mt-1.5 text-xs text-gray-700 leading-relaxed font-medium text-justify whitespace-pre-line dark:text-gray-300">

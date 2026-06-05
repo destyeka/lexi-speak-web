@@ -1620,38 +1620,47 @@ export default function RoleOverviewPanel({
                 {filteredLogs.length === 0 ? (
                   <p className="text-xs text-gray-500 text-center py-6">No practice session records found for this filter.</p>
                 ) : (
-                  filteredLogs.map((record) => {
-                    const recordDate = new Date(record.recorded_at);
-                    const timeString = recordDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    const dateString = recordDate.toLocaleDateString([], { day: 'numeric', month: 'short' });
+ filteredLogs.map((record) => {
+  const recordDate = new Date(record.recorded_at);
+  const timeString = recordDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const dateString = recordDate.toLocaleDateString([], { day: 'numeric', month: 'short' });
 
-                    return (
-                      <button
-                        key={record.id}
-                        type="button"
-                        onClick={() => {
-                          setHistoryDetailModal({ open: false, unit_index: null, part_index: null });
-                          router.push(`/learn/result?id=${record.id}`);
-                        }}
-                        className="w-full flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/40 p-2.5 text-left transition hover:border-brand-300 hover:bg-brand-50/20 dark:border-gray-800 dark:bg-white/[0.01] dark:hover:border-brand-900/40 cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="text-[11px] font-medium text-gray-400 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 px-2 py-0.5 rounded-md">
-                            {dateString} • {timeString}
-                          </div>
-                          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                            {record.speaking_attempts} Speaking {record.speaking_attempts === 1 ? 'Attempt' : 'Attempts'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="rounded-lg bg-brand-50 px-2 py-0.5 text-xs font-bold text-brand-700 dark:bg-brand-500/10 dark:text-brand-400">
-                            Band {(formatBand(record.score) ?? 0).toFixed(1)}
-                          </span>
-                          <span className="text-[10px] text-gray-400 group-hover:text-red-500 transition font-medium"></span>
-                        </div>
-                      </button>
-                    );
-                  })
+  return (
+    <button
+      key={record.id}
+      type="button"
+      onClick={() => {
+        setHistoryDetailModal({ open: false, unit_index: null, part_index: null });
+        router.push(`/learn/result?id=${record.id}`);
+      }}
+      className="w-full flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/40 p-2.5 text-left transition hover:border-brand-300 hover:bg-brand-50/20 dark:border-gray-800 dark:bg-white/[0.01] dark:hover:border-brand-900/40 cursor-pointer group"
+    >
+      <div className="flex items-center gap-3">
+        {/* 📅 Kotak Tanggal & Jam Bawaan */}
+        <div className="text-[11px] font-medium text-gray-400 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 px-2 py-0.5 rounded-md">
+          {dateString} • {timeString}
+        </div>
+
+        {/* 🌟 BARU: Badge Pengenal Part 1 / 2 / 3 */}
+        <span className="px-2.5 py-1.5 text-[10px] font-bold rounded uppercase bg-red-50 text-[#C95B5B] dark:bg-red-950/40 border border-red-100 dark:border-red-900/20">
+          {record.part_index ? `Part ${record.part_index}` : "Full Test"}
+        </span>
+
+        {/* 🎤 Teks Attempts Bawaan */}
+        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+          {record.speaking_attempts} Speaking {record.speaking_attempts === 1 ? 'Attempt' : 'Attempts'}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className="rounded-lg bg-brand-50 px-2 py-0.5 text-xs font-bold text-brand-700 dark:bg-brand-500/10 dark:text-brand-400">
+          Band {(formatBand(record.score) ?? 0).toFixed(1)}
+        </span>
+        <span className="text-[10px] text-gray-400 group-hover:text-red-500 transition font-medium"></span>
+      </div>
+    </button>
+  );
+})
                 )}
               </div>
 

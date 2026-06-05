@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
+import VoiceRecorder from "@/components/VoiceRecorder";
 import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
 import { supabase } from "@/lib/supabase";
 import {
@@ -167,6 +168,7 @@ async function persistPracticeResult({
   partIndex,
   unitIndex,
   assignmentId,
+  audioUrl,
 }: {
   transcript: string;
   topic: Topic | null;
@@ -174,6 +176,7 @@ async function persistPracticeResult({
   partIndex: number;
   unitIndex: number | null;
   assignmentId?: string | null;
+  audioUrl?: string | null;
 }) {
   const trimmedTranscript = transcript.trim();
   if (!trimmedTranscript) return;
@@ -248,6 +251,7 @@ async function persistPracticeResult({
       assignment_id: assignmentId ?? null,
       analysis: analysisPayload,
       attempt_type: "practice",
+      audio_url: audioUrl ?? null,
     }),
   });
 
@@ -288,6 +292,7 @@ async function persistPracticeResult({
               score: latestScore,
               metrics: metricPayload,
               analysis: analysisPayload,
+              audio_url: audioUrl ?? null,
             },
           ], { onConflict: "assignment_id,student_id" });
         if (submissionError) throw submissionError;
@@ -304,6 +309,7 @@ async function persistPracticeResult({
                 status: "submitted",
                 submitted_at: submittedAt,
                 updated_at: submittedAt,
+                audio_url: audioUrl,
               },
             ], { onConflict: "assignment_id,student_id" });
         } else {
@@ -321,6 +327,7 @@ export default function LexaPracticeSession() {
   const searchParams = useSearchParams();
   const [page, setPage] = useState<PageValue>(PAGES.INTRO);
   const [time, setTime] = useState(0);
+  const [audioUrl, setAudioUrl] = useState<string>("");
   const [isListening, setIsListening] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
@@ -521,10 +528,10 @@ export default function LexaPracticeSession() {
   };
 
   // PERBAIKAN 2: Tangkap sisa teks interim sebelum berpindah ke halaman result
+// PERBAIKAN: Bersihkan parameter audioUrl yang bikin error reference
   const finishSession = () => {
     setIsListening(false);
     setIsRecording(false);
-
 
     const remainingText = liveTranscript.trim() || interimTranscript.trim();
 
@@ -537,7 +544,6 @@ export default function LexaPracticeSession() {
 
     if (page === PAGES.PART3_SESSION) {
       const finalTranscript = appendIfMissing(transcriptPart3, setTranscriptPart3, remainingText);
-      // For assignments, save progress per-part then show result; for normal learn, go to result
       if (isAssignment) {
         void saveAssignmentProgress();
       }
@@ -552,10 +558,10 @@ export default function LexaPracticeSession() {
           partIndex: 2,
           unitIndex: resolvedUnitIndex,
           assignmentId: assignmentId,
+          audioUrl: audioUrl || null, // Sedia cadangan null jika state kosong cok
         });
         setPage(PAGES.PART3_INTRO);
       } else if (isAssignment) {
-        // In assignment mode, save progress and advance to Part 3 if available
         void saveAssignmentProgress();
         if (part3Topic) setPage(PAGES.PART3_INTRO);
         else setPage(PAGES.PART2_RESULT);
@@ -572,10 +578,10 @@ export default function LexaPracticeSession() {
           partIndex: 1,
           unitIndex: resolvedUnitIndex,
           assignmentId: assignmentId,
+          audioUrl: audioUrl || null, // Sedia cadangan null jika state kosong cok
         });
         setPage(PAGES.PART2_INTRO);
       } else if (isAssignment) {
-        // In assignment mode, save progress and advance to Part 2 if available
         void saveAssignmentProgress();
         if (part2Topic) setPage(PAGES.PART2_INTRO);
         else setPage(PAGES.RESULT);
@@ -658,8 +664,10 @@ export default function LexaPracticeSession() {
         partIndex: currentAssignmentPart,
         unitIndex: resolvedUnitIndex,
         assignmentId: assignmentId,
+        audioUrl: audioUrl,
       });
       setAssignmentActionStatus("saved");
+      
     } catch (error) {
       console.error(error);
       setAssignmentActionStatus("error");
@@ -668,17 +676,24 @@ export default function LexaPracticeSession() {
     }
   };
 
-  const submitAssignment = async () => {
+const submitAssignment = async () => {
     setAssignmentActionStatus("saving");
     setAssignmentActionError(null);
     try {
+      // 1. Simpan progress part terakhir terlebih dahulu
       await saveAssignmentProgress();
+      
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
         throw new Error("Silakan login ulang untuk submit assignment.");
       }
-      // Ensure the submission timestamp is not earlier than the recorded score time.
+      
+      // Definisikan default timestamp pengerjaan tugas
       let submittedAt = new Date().toISOString();
+      let submissionScore = null;
+      let submissionMetrics = null;
+
+      // 🔍 MEMBACA DATA HISTORI NILAI TERAKHIR SECARA BERSIH DAN AMAN
       try {
         const { data: latestScoreRow, error: scoreError } = await supabase
           .from("student_score_history")
@@ -687,17 +702,19 @@ export default function LexaPracticeSession() {
           .order("recorded_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        if (!scoreError && latestScoreRow?.recorded_at) {
-          submittedAt = latestScoreRow.recorded_at;
+
+        if (!scoreError && latestScoreRow) {
+          if (latestScoreRow.recorded_at) {
+            submittedAt = latestScoreRow.recorded_at;
+          }
+          submissionScore = latestScoreRow.score ?? null;
+          submissionMetrics = latestScoreRow.metrics ?? null;
         }
-        var submissionScore = latestScoreRow?.score ?? null;
-        var submissionMetrics = latestScoreRow?.metrics ?? null;
       } catch (e) {
-        // ignore and fallback to now
+        console.error("Gagal membaca score history, menggunakan fallback timestamp default.", e);
       }
 
-      // Try upserting submission including score/metrics. If the DB schema
-      // doesn't have those columns (column not found), retry without them.
+      // 📤 UPSERT DATA KE TABEL ASSIGNMENT SUBMISSIONS (BESERTA AUDIO_URL)
       try {
         const { error: submissionError } = await supabase
           .from("assignment_submissions")
@@ -710,13 +727,15 @@ export default function LexaPracticeSession() {
               updated_at: submittedAt,
               score: submissionScore,
               metrics: submissionMetrics,
+              audio_url: audioUrl, // 🌟 COLOK LINK REKAMAN SUARA DI SINI COK!
             },
           ], { onConflict: "assignment_id,student_id" });
+
         if (submissionError) throw submissionError;
       } catch (err: any) {
         const msg = String(err?.message || err);
+        // Fallback otomatis jika kolom score/metrics belum ada pada database skema lama
         if (msg.includes("column \"score\" does not exist") || msg.includes("42703")) {
-          // Retry without score/metrics fields for older DB schema
           const { error: submissionError2 } = await supabase
             .from("assignment_submissions")
             .upsert([
@@ -726,15 +745,19 @@ export default function LexaPracticeSession() {
                 status: "submitted",
                 submitted_at: submittedAt,
                 updated_at: submittedAt,
+                audio_url: audioUrl, // 🌟 TETEP SERTAKAN REKAMAN SUARA DI SINI COK!
               },
             ], { onConflict: "assignment_id,student_id" });
+
           if (submissionError2) throw submissionError2;
         } else {
           throw err;
         }
       }
+
       setAssignmentActionStatus("submitted");
 
+      // 📋 AMBIL DATA CLASS ID UNTUK REDIRECT DASHBOARD MAHASISWA
       const { data: assignmentRecord, error: assignmentError } = await supabase
         .from("assignments")
         .select("class_id")
@@ -796,20 +819,57 @@ export default function LexaPracticeSession() {
         </div>
       ) : null}
 
-      {/* Body */}
+{/* Body */}
       <main style={styles.main}>
         {page === PAGES.INTRO && <IntroPage topic={part1Topic} />}
+        
+        {/* ==================== PART 1 SESSION ==================== */}
         {page === PAGES.SESSION && (
-          <SessionPage topic={part1Topic} questions={part1Questions} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart1} setTranscript={setTranscriptPart1} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} onSaveQuestionTranscripts={(arr) => {
-            const joined = (arr || []).filter(Boolean).join(" ").trim();
-            setTranscriptPart1((prev) => prev === joined ? prev : joined);
-          }} />
+          <SessionPage 
+            topic={part1Topic} 
+            questions={part1Questions} 
+            isListening={isListening} 
+            isRecording={isRecording} 
+            setIsRecording={setIsRecording} 
+            recError={recError} 
+            setRecError={setRecError} 
+            transcript={transcriptPart1} 
+            setTranscript={setTranscriptPart1} 
+            liveTranscript={liveTranscript} 
+            setLiveTranscript={setLiveTranscript} 
+            interimTranscript={interimTranscript} 
+            setInterimTranscript={setInterimTranscript} 
+            onSaveQuestionTranscripts={(arr) => {
+              const joined = (arr || []).filter(Boolean).join(" ").trim();
+              setTranscriptPart1((prev) => prev === joined ? prev : joined);
+            }} 
+            // 💡 Biarkan SessionPage mengontrol recording-nya sendiri cok!
+          />
         )}
+        
         {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} assignmentId={assignmentId} />}
         {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
+        
+        {/* ==================== PART 2 SESSION ==================== */}
         {page === PAGES.PART2_SESSION && (
-          <SessionPagePart2 isRecording={isRecording} setIsRecording={setIsRecording} transcript={transcriptPart2} setTranscript={setTranscriptPart2} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} recError={recError} setRecError={setRecError} isListening={isListening} topic={part2Topic} bullets={part2Bullets} isLoading={isTopicsLoading} />
+          <SessionPagePart2 
+            isRecording={isRecording} 
+            setIsRecording={setIsRecording} 
+            transcript={transcriptPart2} 
+            setTranscript={setTranscriptPart2} 
+            liveTranscript={liveTranscript} 
+            setLiveTranscript={setLiveTranscript} 
+            interimTranscript={interimTranscript} 
+            setInterimTranscript={setInterimTranscript} 
+            recError={recError} 
+            setRecError={setRecError} 
+            isListening={isListening} 
+            topic={part2Topic} 
+            bullets={part2Bullets} 
+            isLoading={isTopicsLoading} 
+          />
         )}
+        
         {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} assignmentId={assignmentId} />}
         {page === PAGES.PART3_INTRO && (
           <IntroPagePart3
@@ -818,12 +878,30 @@ export default function LexaPracticeSession() {
             isLoading={isTopicsLoading}
           />
         )}
+        
+        {/* ==================== PART 3 SESSION ==================== */}
         {page === PAGES.PART3_SESSION && (
-          <SessionPage messages={part3Messages} questions={part3Questions} isListening={isListening} isRecording={isRecording} setIsRecording={setIsRecording} recError={recError} setRecError={setRecError} transcript={transcriptPart3} setTranscript={setTranscriptPart3} liveTranscript={liveTranscript} setLiveTranscript={setLiveTranscript} interimTranscript={interimTranscript} setInterimTranscript={setInterimTranscript} onSaveQuestionTranscripts={(arr) => {
-            const joined = (arr || []).filter(Boolean).join(" ").trim();
-            setTranscriptPart3((prev) => prev === joined ? prev : joined);
-          }} />
+          <SessionPage 
+            messages={part3Messages} 
+            questions={part3Questions} 
+            isListening={isListening} 
+            isRecording={isRecording} 
+            setIsRecording={setIsRecording} 
+            recError={recError} 
+            setRecError={setRecError} 
+            transcript={transcriptPart3} 
+            setTranscript={setTranscriptPart3} 
+            liveTranscript={liveTranscript} 
+            setLiveTranscript={setLiveTranscript} 
+            interimTranscript={interimTranscript} 
+            setInterimTranscript={setInterimTranscript} 
+            onSaveQuestionTranscripts={(arr) => {
+              const joined = (arr || []).filter(Boolean).join(" ").trim();
+              setTranscriptPart3((prev) => prev === joined ? prev : joined);
+            }} 
+          />
         )}
+        
         {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} assignmentId={assignmentId} />}
       </main>
 
@@ -898,9 +976,13 @@ export default function LexaPracticeSession() {
             ) : page === PAGES.PART3_INTRO ? (
               <button style={styles.startBtn} onClick={startPart3Session}>Start Session</button>
             ) : (
-              <button style={hasSpoken ? styles.startBtn : { ...styles.startBtn, background: "#d1d5db", color: "#9ca3af", boxShadow: "none", cursor: "not-allowed" }} onClick={hasSpoken ? finishSession : undefined} disabled={!hasSpoken} >
-                Finish Session
-              </button>
+              <button 
+                style={hasSpoken ? styles.startBtn : { ...styles.startBtn, background: "#d1d5db", color: "#9ca3af", boxShadow: "none", cursor: "not-allowed" }} 
+                onClick={hasSpoken ? finishSession : undefined} 
+                disabled={!hasSpoken} 
+              > 
+                Finish Session 
+              </button> 
             )}
           </>
         )}
@@ -1836,6 +1918,7 @@ useEffect(() => {
           metrics: metricPayload,
           attempt_type: "test",
           assignment_id: assignmentId ?? null,
+          audio_url: audioUrl ?? null,
         }),
       });
 
