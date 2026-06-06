@@ -13,6 +13,9 @@ interface ScoreHistoryRow {
   metrics: any;
   analysis: any;
   notes: string | null;
+  audio_url?: string | null;
+assignment_id?: string;
+student_id?: string;
 }
 
 function formatBand(score: number | string | undefined): string {
@@ -23,6 +26,8 @@ function formatBand(score: number | string | undefined): string {
 
 export default function LearnResultPage() {
   const searchParams = useSearchParams();
+  const isAssignment =
+  !!searchParams.get("assignmentId");
   const queryId = searchParams.get("id") || searchParams.get("assignmentId");
   
   const [loading, setLoading] = useState(true);
@@ -62,7 +67,16 @@ export default function LearnResultPage() {
       if (!isUUID) {
         const { data, error: dbError } = await supabase
           .from("student_score_history")
-          .select("id, score, part_index, unit_index, metrics, analysis, notes")
+          .select(`
+            id,
+            score,
+            part_index,
+            unit_index,
+            metrics,
+            analysis,
+            notes,
+            audio_url
+          `)
           .eq("id", Number(queryId))
           .single();
 
@@ -74,8 +88,15 @@ export default function LearnResultPage() {
         targetRow = data;
       } else {
         const { data, error: dbError } = await supabase
-          .from("assignment_submissions")
-          .select("id, score, part_index, unit_index, metrics, analysis, notes")
+        .from("assignment_submissions")
+        .select(`
+          assignment_id,
+          student_id,
+          score,
+          metrics,
+          analysis,
+          audio_url
+        `)
           .eq("assignment_id", queryId)
           .limit(1);
 
@@ -95,11 +116,32 @@ export default function LearnResultPage() {
       }
 
       // 2. Jika baris yang diklik adalah Summary Akhir (part_index nya null/empty)
+      if (isUUID) {
+  setPartsData({
+    overallScore: targetRow.score,
+    part1: targetRow,
+    part2: null,
+    part3: null,
+  });
+
+  setActivePart("part1");
+  setLoading(false);
+  return;
+}
       if (targetRow.part_index === null && targetRow.unit_index) {
         // Tarik data history latihan untuk part 1, 2, dan 3 pada unit_index yang sama
         const { data: historyRows, error: historyError } = await supabase
           .from("student_score_history")
-          .select("id, score, part_index, unit_index, metrics, analysis,notes")
+          .select(`
+              id,
+              score,
+              part_index,
+              unit_index,
+              metrics,
+              analysis,
+              notes,
+              audio_url
+            `)
           .eq("unit_index", targetRow.unit_index)
           .order("id", { ascending: false });
 
@@ -173,6 +215,7 @@ if (historyError) {
       notes: activeRow.notes, // 🌟 Amankan kolom notes langsung dari raw table row
       metrics: parseJsonField(activeRow.metrics),
       analysis: parseJsonField(activeRow.analysis),
+      audio_url: activeRow.audio_url,
     };
   }, [partsData, activePart]);
 
@@ -272,7 +315,11 @@ return (
               <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-white/[0.01]">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Session Type</p>
                 <p className="mt-3 text-base font-bold text-gray-800 dark:text-gray-200">
-                  {partsData.part1 && partsData.part2 && partsData.part3 ? "Full IELTS Mock Test" : "Single Part Practice"}
+                  {isAssignment
+                  ? "Assignment Submission"
+                  : partsData.part1 && partsData.part2 && partsData.part3
+                  ? "Full IELTS Mock Test"
+                  : "Single Part Practice"}
                 </p>
               </div>
             </div>
@@ -282,6 +329,7 @@ return (
               <h2 className="text-base font-bold text-gray-900 dark:text-white tracking-tight">Hasil Analisis Speaking</h2>
               
               {/* Tab Switcher */}
+              {!isAssignment && (
               <div className="flex p-0.5 bg-gray-100 rounded-xl space-x-1 dark:bg-gray-800">
                 {(["part1", "part2", "part3"] as const).map((part) => (
                   <button
@@ -299,15 +347,18 @@ return (
                       {formatBand(tabScores[part] ?? "-")}
                     </span>
                   </button>
-                ))}
-              </div>
+              ))}
+            </div>
+          )}
 
               {activePartPayload ? (
                 <div className="space-y-4">
                   {/* Recommendation */}
                   <div className="rounded-xl border border-amber p-4 bg-white dark:border-[#C95B5B] dark:bg-white">
                     <p className="text-[10px] font-bold text-[#C95B5B] uppercase tracking-widest dark:text-red-400">
-                      Recommendation ({activePart.toUpperCase()})
+                      {isAssignment
+                    ? "Assignment Recommendation"
+                    : `Recommendation (${activePart.toUpperCase()})`}
                     </p>
                     <p className="mt-1.5 text-xs font-semibold text-gray-800 leading-relaxed dark:text-gray-200">
                       {aiRecommendationText}
@@ -317,17 +368,42 @@ return (
                   {/* AI Summary */}
                   <div className="rounded-xl border border-amber p-4 bg-white dark:border-[#C95B5B] dark:bg-white">
                     <p className="text-[10px] font-bold text-[#C95B5B] uppercase tracking-widest dark:text-red-400">
-                      AI Summary ({activePart.toUpperCase()})
+                      {isAssignment
+                    ? "Assignment AI Summary"
+                    : `AI Summary (${activePart.toUpperCase()})`}
                     </p>
                     <p className="mt-1.5 text-xs text-gray-700 leading-relaxed font-medium text-justify whitespace-pre-line dark:text-gray-300">
                       {aiSummaryText}
                     </p>
                   </div>
+                  
+                  {/* Audio Recording */}
+                  {activePartPayload?.audio_url && (
+                    <div className="rounded-xl border border-gray-150 p-4 bg-white dark:border-gray-800 dark:bg-transparent">
+                      <p className="text-[10px] font-bold text-[#C95B5B] uppercase tracking-widest">
+                        Audio Recording
+                      </p>
+
+                      <audio
+                        controls
+                        src={activePartPayload.audio_url}
+                        className="w-full mt-3"
+                      />
+
+                      <p className="mt-2 text-[11px] text-gray-500">
+                        Listen to your recorded speaking response.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Breakdown Metrics */}
                   <div className="rounded-xl border border-gray-150 p-4 bg-white space-y-4 dark:border-gray-800 dark:bg-transparent">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                      Metrics Breakdown ({activePart.toUpperCase().replace("PART", "Part ")})
+                      {isAssignment
+                      ? "Assignment Metrics Breakdown"
+                      : `Metrics Breakdown (${activePart
+                          .toUpperCase()
+                          .replace("PART", "Part ")})`}
                     </p>
 
                     {partMetricsDetail.length > 0 ? (

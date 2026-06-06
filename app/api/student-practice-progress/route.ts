@@ -19,6 +19,7 @@ type PracticeProgressPayload = {
   assignment_id?: string | null;
   analysis?: Record<string, unknown> | null;
   attempt_type?: "practice" | "test";
+  audio_url?: string | null;
 };
 
 export const runtime = "nodejs";
@@ -59,6 +60,10 @@ export async function POST(request: Request) {
     const assignmentId = typeof body.assignment_id === "string" ? body.assignment_id : null;
     const analysis = body.analysis && typeof body.analysis === "object" ? body.analysis : null;
     const attemptType = body.attempt_type === "test" ? "test" : "practice";
+    const audioUrl =
+    typeof body.audio_url === "string"
+      ? body.audio_url
+      : null;
 
     if (!Number.isFinite(latestScore) || !Number.isFinite(progressPercent) || !Number.isFinite(lastPartIndex) || !lastActivityAt) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -101,6 +106,7 @@ const { error: rpcError } = await supabase.rpc("save_student_practice_progress",
   assignment_id: assignmentId,
   analysis,
   attempt_type: attemptType,
+    audio_url: audioUrl,
 });
     if (!rpcError) {
       console.log("RPC SUCCESS");
@@ -136,6 +142,8 @@ const { error: rpcError } = await supabase.rpc("save_student_practice_progress",
         notes,
         updated_at: lastActivityAt,
         updated_by: studentId,
+        
+        audio_url: audioUrl,
       },
       { onConflict: "student_id" }
     );
@@ -174,6 +182,7 @@ const { error: rpcError } = await supabase.rpc("save_student_practice_progress",
               score: latestScore,
               metrics,
               analysis,
+              audio_url: (body as any).audio_url ?? null,
             },
           ], { onConflict: "assignment_id,student_id" });
           
@@ -191,6 +200,7 @@ const { error: rpcError } = await supabase.rpc("save_student_practice_progress",
                   updated_at: submittedAt,
                   score: latestScore,
                   metrics,
+                  audio_url: (body as any).audio_url ?? null,
                 },
               ], { onConflict: "assignment_id,student_id" });
           } else {

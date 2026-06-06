@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
-import VoiceRecorder from "@/components/VoiceRecorder";
+
 import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
 import { supabase } from "@/lib/supabase";
 import {
@@ -41,6 +41,8 @@ interface SessionPageProps {
   interimTranscript: string;
   setInterimTranscript: React.Dispatch<React.SetStateAction<string>>;
   onSaveQuestionTranscripts?: (arr: string[]) => void;
+  setAudioUrl?: (url: string) => void;
+
 }
 
 interface SessionPagePart2Props {
@@ -58,6 +60,8 @@ interface SessionPagePart2Props {
   topic: Topic | null;
   bullets?: string[];
   isLoading?: boolean;
+  setAudioUrl?: (url: string) => void;
+
 }
 
 interface ResultPageProps {
@@ -108,8 +112,8 @@ const PAGES: PageMap = {
   RESULT: "result",
   PART2_INTRO: "part2_intro",
   PART2_SESSION: "part2_session",
-  PART2_RESULT: "part2_result"
-  , PART3_INTRO: "part3_intro",
+  PART2_RESULT: "part2_result",
+  PART3_INTRO: "part3_intro",
   PART3_SESSION: "part3_session",
   PART3_RESULT: "part3_result"
 };
@@ -188,7 +192,7 @@ async function persistPracticeResult({
       rubric: detail.rubric?.trim() || "",
     }))
     .filter((item) => item.rubric.length > 0);
-
+    console.log("SAVE AUDIO URL =", audioUrl);
   const response = await fetch("/api/evaluate", {
     method: "POST",
     headers: {
@@ -256,14 +260,11 @@ async function persistPracticeResult({
     }),
   });
 
-  // Also persist metrics into assignment_submissions so coach can view results
-  // immediately. This mirrors the final submit behavior but runs at save-time.
   if (assignmentId) {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) return;
 
-      // Use the latest recorded score time if available to avoid timestamp regressions
       let submittedAt = new Date().toISOString();
       try {
         const { data: latestScoreRow, error: scoreError } = await supabase
@@ -300,7 +301,6 @@ async function persistPracticeResult({
       } catch (err: any) {
         const msg = String(err?.message || err);
         if (msg.includes("column \"score\" does not exist") || msg.includes("column \"analysis\" does not exist") || msg.includes("42703")) {
-          // Retry without score/metrics/analysis fields for older DB schema
           await supabase
             .from("assignment_submissions")
             .upsert([
@@ -331,6 +331,8 @@ export default function LexaPracticeSession() {
   const [audioUrl, setAudioUrl] = useState<string>("");
   const [isListening, setIsListening] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+
+  
   const [recError, setRecError] = useState<string | null>(null);
   const [interimTranscript, setInterimTranscript] = useState("");
   const [liveTranscript, setLiveTranscript] = useState("");
@@ -339,10 +341,7 @@ export default function LexaPracticeSession() {
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const assignmentAutoStartedRef = useRef(false);
 
-  // PART 3 state (mirip Part 1)
   const [transcriptPart3, setTranscriptPart3] = useState("");
-
-  // PERBAIKAN 1: Pisah state transkrip agar Part 1 tidak terhapus oleh Part 2
   const [transcriptPart1, setTranscriptPart1] = useState("");
   const [transcriptPart2, setTranscriptPart2] = useState("");
 
@@ -517,7 +516,6 @@ export default function LexaPracticeSession() {
 
   const startPart3Session = () => {
     if (isAssignmentLocked) return;
-    // Part 3 UI should mirror Part 1 (longer turn)
     setTime(5 * 60);
     setIsListening(true);
     setIsRecording(false);
@@ -528,15 +526,13 @@ export default function LexaPracticeSession() {
     setPage(PAGES.PART3_SESSION);
   };
 
-  // PERBAIKAN 2: Tangkap sisa teks interim sebelum berpindah ke halaman result
-// PERBAIKAN: Bersihkan parameter audioUrl yang bikin error reference
   const finishSession = () => {
     setIsListening(false);
-    setIsRecording(false);
+  setIsRecording(false);
+
 
     const remainingText = liveTranscript.trim() || interimTranscript.trim();
 
-    // Helper to append remaining text to a transcript state safely
     const appendIfMissing = (current: string, setter: (v: string) => void, extra: string) => {
       const final = (current + (extra ? ` ${extra}` : "")).trim();
       if (extra && !current.includes(extra)) setter(final);
@@ -559,7 +555,7 @@ export default function LexaPracticeSession() {
           partIndex: 2,
           unitIndex: resolvedUnitIndex,
           assignmentId: assignmentId,
-          audioUrl: audioUrl || null, // Sedia cadangan null jika state kosong cok
+          audioUrl: audioUrl || null,
         });
         setPage(PAGES.PART3_INTRO);
       } else if (isAssignment) {
@@ -579,7 +575,7 @@ export default function LexaPracticeSession() {
           partIndex: 1,
           unitIndex: resolvedUnitIndex,
           assignmentId: assignmentId,
-          audioUrl: audioUrl || null, // Sedia cadangan null jika state kosong cok
+          audioUrl: audioUrl || null,
         });
         setPage(PAGES.PART2_INTRO);
       } else if (isAssignment) {
@@ -589,6 +585,7 @@ export default function LexaPracticeSession() {
       } else {
         setPage(PAGES.RESULT);
       }
+      console.log("audioUrl:", audioUrl);
     }
 
     setLiveTranscript("");
@@ -677,11 +674,10 @@ export default function LexaPracticeSession() {
     }
   };
 
-const submitAssignment = async () => {
+  const submitAssignment = async () => {
     setAssignmentActionStatus("saving");
     setAssignmentActionError(null);
     try {
-      // 1. Simpan progress part terakhir terlebih dahulu
       await saveAssignmentProgress();
       
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -689,12 +685,10 @@ const submitAssignment = async () => {
         throw new Error("Silakan login ulang untuk submit assignment.");
       }
       
-      // Definisikan default timestamp pengerjaan tugas
       let submittedAt = new Date().toISOString();
       let submissionScore = null;
       let submissionMetrics = null;
 
-      // 🔍 MEMBACA DATA HISTORI NILAI TERAKHIR SECARA BERSIH DAN AMAN
       try {
         const { data: latestScoreRow, error: scoreError } = await supabase
           .from("student_score_history")
@@ -715,7 +709,6 @@ const submitAssignment = async () => {
         console.error("Gagal membaca score history, menggunakan fallback timestamp default.", e);
       }
 
-      // 📤 UPSERT DATA KE TABEL ASSIGNMENT SUBMISSIONS (BESERTA AUDIO_URL)
       try {
         const { error: submissionError } = await supabase
           .from("assignment_submissions")
@@ -728,14 +721,13 @@ const submitAssignment = async () => {
               updated_at: submittedAt,
               score: submissionScore,
               metrics: submissionMetrics,
-              audio_url: audioUrl, // 🌟 COLOK LINK REKAMAN SUARA DI SINI COK!
+              audio_url: audioUrl,
             },
           ], { onConflict: "assignment_id,student_id" });
 
         if (submissionError) throw submissionError;
       } catch (err: any) {
         const msg = String(err?.message || err);
-        // Fallback otomatis jika kolom score/metrics belum ada pada database skema lama
         if (msg.includes("column \"score\" does not exist") || msg.includes("42703")) {
           const { error: submissionError2 } = await supabase
             .from("assignment_submissions")
@@ -746,7 +738,7 @@ const submitAssignment = async () => {
                 status: "submitted",
                 submitted_at: submittedAt,
                 updated_at: submittedAt,
-                audio_url: audioUrl, // 🌟 TETEP SERTAKAN REKAMAN SUARA DI SINI COK!
+                audio_url: audioUrl,
               },
             ], { onConflict: "assignment_id,student_id" });
 
@@ -758,7 +750,6 @@ const submitAssignment = async () => {
 
       setAssignmentActionStatus("submitted");
 
-      // 📋 AMBIL DATA CLASS ID UNTUK REDIRECT DASHBOARD MAHASISWA
       const { data: assignmentRecord, error: assignmentError } = await supabase
         .from("assignments")
         .select("class_id")
@@ -780,7 +771,6 @@ const submitAssignment = async () => {
   return (
     <div style={styles.root}>
       <style>{css}</style>
-      {/* Header */}
       <header style={styles.header}>
         <button style={styles.backBtn} onClick={() => {
           if (page === PAGES.SESSION) setPage(PAGES.INTRO);
@@ -820,11 +810,10 @@ const submitAssignment = async () => {
         </div>
       ) : null}
 
-{/* Body */}
       <main style={styles.main}>
         {page === PAGES.INTRO && <IntroPage topic={part1Topic} />}
         
-        {/* ==================== PART 1 SESSION ==================== */}
+       
         {page === PAGES.SESSION && (
           <SessionPage 
             topic={part1Topic} 
@@ -851,25 +840,30 @@ const submitAssignment = async () => {
         {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
         {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
         
-        {/* ==================== PART 2 SESSION ==================== */}
-        {page === PAGES.PART2_SESSION && (
-          <SessionPagePart2 
-            isRecording={isRecording} 
-            setIsRecording={setIsRecording} 
-            transcript={transcriptPart2} 
-            setTranscript={setTranscriptPart2} 
-            liveTranscript={liveTranscript} 
-            setLiveTranscript={setLiveTranscript} 
-            interimTranscript={interimTranscript} 
-            setInterimTranscript={setInterimTranscript} 
-            recError={recError} 
-            setRecError={setRecError} 
-            isListening={isListening} 
-            topic={part2Topic} 
-            bullets={part2Bullets} 
-            isLoading={isTopicsLoading} 
-          />
-        )}
+ {page === PAGES.PART2_SESSION && (
+  <>
+    <SessionPagePart2
+      isRecording={isRecording}
+      setIsRecording={setIsRecording}
+      transcript={transcriptPart2}
+      setTranscript={setTranscriptPart2}
+      liveTranscript={liveTranscript}
+      setLiveTranscript={setLiveTranscript}
+      interimTranscript={interimTranscript}
+      setInterimTranscript={setInterimTranscript}
+      recError={recError}
+      setRecError={setRecError}
+      isListening={isListening}
+      topic={part2Topic}
+      bullets={part2Bullets}
+      isLoading={isTopicsLoading}
+      setAudioUrl={setAudioUrl}
+      
+    />
+
+
+  </>
+)}
         
         {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
         {page === PAGES.PART3_INTRO && (
@@ -880,33 +874,42 @@ const submitAssignment = async () => {
           />
         )}
         
-        {/* ==================== PART 3 SESSION ==================== */}
-        {page === PAGES.PART3_SESSION && (
-          <SessionPage 
-            messages={part3Messages} 
-            questions={part3Questions} 
-            isListening={isListening} 
-            isRecording={isRecording} 
-            setIsRecording={setIsRecording} 
-            recError={recError} 
-            setRecError={setRecError} 
-            transcript={transcriptPart3} 
-            setTranscript={setTranscriptPart3} 
-            liveTranscript={liveTranscript} 
-            setLiveTranscript={setLiveTranscript} 
-            interimTranscript={interimTranscript} 
-            setInterimTranscript={setInterimTranscript} 
-            onSaveQuestionTranscripts={(arr) => {
-              const joined = (arr || []).filter(Boolean).join(" ").trim();
-              setTranscriptPart3((prev) => prev === joined ? prev : joined);
-            }} 
-          />
-        )}
+ {page === PAGES.PART3_SESSION && (
+  <>
+    <SessionPage
+      messages={part3Messages}
+      questions={part3Questions}
+      isListening={isListening}
+      isRecording={isRecording}
+      setIsRecording={setIsRecording}
+      recError={recError}
+      setRecError={setRecError}
+      transcript={transcriptPart3}
+      setTranscript={setTranscriptPart3}
+      liveTranscript={liveTranscript}
+      setLiveTranscript={setLiveTranscript}
+      interimTranscript={interimTranscript}
+      setInterimTranscript={setInterimTranscript}
+      setAudioUrl={setAudioUrl}
+      onSaveQuestionTranscripts={(arr) => {
+        const joined = (arr || [])
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        setTranscriptPart3((prev) =>
+          prev === joined ? prev : joined
+        );
+      }}
+    />
+
+
+  </>
+)}
         
         {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
       </main>
 
-      {/* Footer Utama */}
       <footer style={styles.footer}>
         {isAssignmentResultPage ? (
           <>
@@ -1089,14 +1092,34 @@ function IntroPagePart3({
   );
 }
 
-function SessionPage({ topic, questions = [], messages: msgProp, isRecording, setIsRecording, recError, setRecError, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, onSaveQuestionTranscripts }: SessionPageProps & { questions?: string[] }) {
-  // Generate messages from topic if available, otherwise use provided messages or default
+function SessionPage({
+  topic,
+  questions = [],
+  messages: msgProp,
+  isRecording,
+  setIsRecording,
+  recError,
+  setRecError,
+  transcript,
+  setTranscript,
+  liveTranscript,
+  setLiveTranscript,
+  interimTranscript,
+  setInterimTranscript,
+  onSaveQuestionTranscripts,
+  setAudioUrl,
+}: SessionPageProps & {
+  questions?: string[];
+}) {
   const messages = msgProp || (topic ? [
     { role: "lexa", text: `Let's talk about ${topic.title}. ${topic.prompt || "Please share your thoughts."}` }
   ] : [
     { role: "lexa", text: "Good morning, my name is Lexa. What's your name?" }
   ]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const isStoppingRef = useRef(false);
   const stoppingIntentionalRef = useRef(false);
   const transcriptRef = useRef<string>("");
@@ -1105,7 +1128,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
   const [questionTranscripts, setQuestionTranscripts] = useState<string[]>([]);
   const perQuestionAccumRef = useRef<string[]>([]);
 
-  // When questionTranscripts updates, notify parent outside render phase
   useEffect(() => {
     try {
       if (onSaveQuestionTranscripts) onSaveQuestionTranscripts(questionTranscripts);
@@ -1117,7 +1139,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
   useEffect(() => {
     setQuestionIndex(0);
     questionIndexRef.current = 0;
-    // initialize per-question transcripts to match incoming questions
     const init = Array(questions.length).fill("");
     setQuestionTranscripts(init);
     perQuestionAccumRef.current = init.slice();
@@ -1126,7 +1147,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
   const activeQuestion = questions[questionIndex] ?? null;
   const hasMoreQuestions = questionIndex < questions.length - 1;
 
-  // Build per-question display for the live transcript card.
   const currentSavedAnswer = (questionTranscripts[questionIndex] || "").trim();
   const displayTranscript = recError
     ? recError
@@ -1138,12 +1158,9 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
           ? (transcriptRef.current || "")
           : (currentSavedAnswer || "Start speaking...");
 
-  // Build a conversation flow combining initial messages, questions and per-question user transcripts
   const conversationMessages: ChatMessage[] = [];
-  // start with system/intro messages
   conversationMessages.push(...messages);
 
-  // for each question up to current index, append question and its user reply (if any)
   const upto = Math.min(questionIndex, questions.length - 1);
   for (let i = 0; i <= upto; i++) {
     const q = questions[i];
@@ -1152,36 +1169,38 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     if (userAns && userAns.trim()) conversationMessages.push({ role: "user", text: userAns.trim() });
   }
 
-  // include the active question if it's the current one (so it shows even before user answers)
   if (activeQuestion && (questionIndex <= questions.length - 1)) {
-    // Only append if an identical Lexa question isn't already present
     const alreadyHas = conversationMessages.some((m) => m.role === "lexa" && m.text === activeQuestion);
     if (!alreadyHas) conversationMessages.push({ role: "lexa", text: activeQuestion });
   }
 
-  const advanceQuestion = () => {
-    if (!hasMoreQuestions) return;
+const advanceQuestion = () => {
+  if (!hasMoreQuestions) return;
 
-    setRecError(null);
-    setIsRecording(false);
-    setLiveTranscript("");
-    setInterimTranscript("");
-    if (recognitionRef.current) {
+  setRecError(null);
+  setIsRecording(false);
+  setLiveTranscript("");
+  setInterimTranscript("");
+
+  if (recognitionRef.current) {
+    try {
+      isStoppingRef.current = true;
       try {
-        // prefer stop() so final result can be delivered before advancing
-        isStoppingRef.current = true;
-        try { recognitionRef.current.stop(); } catch { recognitionRef.current.abort(); }
-      } catch { }
-      // leave onend to clear recognitionRef and isStoppingRef
-    }
-    setQuestionIndex((prev) => {
-      const next = prev + 1;
-      questionIndexRef.current = next;
-      // ensure accumulator for the next question starts empty
-      perQuestionAccumRef.current[next] = perQuestionAccumRef.current[next] || "";
-      return next;
-    });
-  };
+        recognitionRef.current.stop();
+      } catch {
+        recognitionRef.current.abort();
+      }
+    } catch {}
+  }
+
+  setQuestionIndex((prev) => {
+    const next = prev + 1;
+    questionIndexRef.current = next;
+    perQuestionAccumRef.current[next] =
+      perQuestionAccumRef.current[next] || "";
+    return next;
+  });
+};
 
   const toggleRecording = () => {
     if (isRecording) {
@@ -1189,8 +1208,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
       return;
     }
 
-    // Only auto-advance if the CURRENT question already has a saved answer.
-    // This avoids skipping the next question when the global transcript contains previous answers.
     const currentAnswered = Boolean((questionTranscripts[questionIndexRef.current] || "").trim());
     if (currentAnswered && hasMoreQuestions) {
       advanceQuestion();
@@ -1203,14 +1220,89 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
 
   const startRecording = async () => {
     setRecError(null);
-    console.debug("[Lexa] startRecording called", { questionIndex: questionIndexRef.current });
-    // PERBAIKAN 3: Jangan hapus permanen transcript disini agar tidak ter-wipe di tengah jalan
     setLiveTranscript("");
     setInterimTranscript("");
+    const stream = await navigator.mediaDevices.getUserMedia({
+  audio: true,
+});
+
+mediaStreamRef.current = stream;
+audioChunksRef.current = [];
+
+const mediaRecorder = new MediaRecorder(stream);
+
+mediaRecorder.ondataavailable = (event) => {
+  if (event.data.size > 0) {
+    audioChunksRef.current.push(event.data);
+  }
+};
+
+mediaRecorder.onstop = async () => {
+  console.log("ONSTOP DIPANGGIL");
+
+
+ 
+    console.log(
+    "Chunks:",
+    audioChunksRef.current.length
+  );
+
+  console.log(
+    "Size:",
+    audioChunksRef.current.reduce(
+      (acc, chunk) => acc + chunk.size,
+      0
+    )
+  );
+  try {
+    const audioBlob = new Blob(audioChunksRef.current, {
+      type: "audio/webm",
+    });
+
+    const fileName = `audio_${Date.now()}.webm`;
+
+    const { error } = await supabase.storage
+      .from("SPEAKING-AUDIOS")
+      .upload(fileName, audioBlob, {
+        contentType: "audio/webm",
+      });
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    const { data } = supabase.storage
+      .from("SPEAKING-AUDIOS")
+      .getPublicUrl(fileName);
+
+    console.log("UPLOAD SUCCESS:", data.publicUrl);
+
+    setAudioUrl?.(data.publicUrl);
+    console.log(
+  "SET AUDIO URL:",
+  data.publicUrl
+);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    mediaStreamRef.current
+      ?.getTracks()
+      .forEach((track) => track.stop());
+  }
+    // setIsUploadingAudio(false);
+  
+};
+
+mediaRecorder.start(1000);
+console.log(
+  "REKAMAN DIMULAI",
+  Date.now()
+);
+mediaRecorderRef.current = mediaRecorder;
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) throw new Error("Browser tidak mendukung Live Transcription.");
 
-    // Jika ada instance sebelumnya, hentikan/abort dulu untuk menghindari konflik
     if (recognitionRef.current) {
       try {
         isStoppingRef.current = true;
@@ -1225,17 +1317,13 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
-    // base live transcript on current question's saved answer so new question starts empty
     transcriptRef.current = (questionTranscripts[questionIndexRef.current] || "").trim();
-    // ensure accumulator exists for this question
     perQuestionAccumRef.current[questionIndexRef.current] = perQuestionAccumRef.current[questionIndexRef.current] || "";
 
     recognition.onresult = (event: any) => {
-      console.debug("[Lexa] onresult fired", { questionIndex: questionIndexRef.current });
       let accumulatedFinal = "";
       let interimResult = "";
 
-      // 🔥 PERBAIKAN 1: Loop selalu dari 0 agar tidak terjadi double accumulation dari resultIndex
       for (let i = 0; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
           accumulatedFinal += event.results[i][0].transcript + " ";
@@ -1244,18 +1332,13 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
         }
       }
 
-      // 🔥 PERBAIKAN 2: Gunakan landasan teks awal saat mic dinyalakan,
-      // lalu gabungkan dengan hasil baru (bukan pakai += yang bikin teks numpuk)
       const baseSpeech = (questionTranscripts[questionIndexRef.current] || "").trim();
       const totalFinalText = (baseSpeech ? baseSpeech + " " : "") + accumulatedFinal;
 
       transcriptRef.current = totalFinalText.trim();
-
-      // Sinkronkan ke live transcription card
       setLiveTranscript(totalFinalText + interimResult);
       setInterimTranscript(interimResult);
 
-      // 🔥 PERBAIKAN 3: Simpan langsung ke state tanpa perQuestionAccumRef yang bikin konflik
       const idxForSave = questionIndexRef.current;
       setTranscript(totalFinalText.trim());
 
@@ -1267,9 +1350,7 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     };
 
     recognition.onerror = (e: SpeechRecognitionErrorEventLike) => {
-      console.debug("[Lexa] onerror", e, { questionIndex: questionIndexRef.current });
       if (e.error === "aborted") return;
-      // if browser reports no-speech, just restart listening (don't abort session)
       if (e.error === "no-speech") {
         setInterimTranscript("");
         setLiveTranscript(transcriptRef.current || "");
@@ -1277,11 +1358,9 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
         return;
       }
       setRecError(`Error: ${e.error}`);
-      // finalize interim + transcriptRef as the final answer for current question
       const finalText = ((transcriptRef.current || "") + (interimTranscript || "")).trim();
       if (finalText) {
         const idxForSave = questionIndexRef.current;
-        // ensure per-question accum has the final text
         perQuestionAccumRef.current[idxForSave] = (perQuestionAccumRef.current[idxForSave] || "") + finalText;
         setTimeout(() => {
           setQuestionTranscripts((prevArr) => {
@@ -1289,7 +1368,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
             copy[idxForSave] = perQuestionAccumRef.current[idxForSave] || "";
             return copy;
           });
-          console.debug("[Lexa] onerror persisted perQuestionAccumRef for idx", idxForSave, perQuestionAccumRef.current[idxForSave]);
         }, 0);
       }
       try { if (recognitionRef.current) { isStoppingRef.current = true; recognitionRef.current.abort(); } } catch { }
@@ -1298,13 +1376,11 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     };
 
     recognition.onend = () => {
-      // If onend triggered because we intentionally stopped, finalize current question
       if (stoppingIntentionalRef.current) {
         stoppingIntentionalRef.current = false;
         const finalText = ((transcriptRef.current || "") + (interimTranscript || "")).trim();
         if (finalText) {
           const idxForSave = questionIndexRef.current;
-          // accumulate and persist
           perQuestionAccumRef.current[idxForSave] = (perQuestionAccumRef.current[idxForSave] || "") + finalText;
           setTimeout(() => {
             setQuestionTranscripts((prevArr) => {
@@ -1312,8 +1388,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
               copy[idxForSave] = perQuestionAccumRef.current[idxForSave] || "";
               return copy;
             });
-            console.debug("[Lexa] onend persisted perQuestionAccumRef for idx", idxForSave, perQuestionAccumRef.current[idxForSave]);
-            // advance after short delay so UI updates show saved answer first
             setTimeout(() => { try { if (hasMoreQuestions) advanceQuestion(); } catch { } }, 120);
           }, 0);
         }
@@ -1322,7 +1396,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
         return;
       }
 
-      // Jika tidak sedang berhenti sengaja, coba restart agar continuous listening tetap bekerja.
       if (recognitionRef.current && !isStoppingRef.current) {
         try { recognition.start(); } catch { }
       } else {
@@ -1334,22 +1407,34 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
     setIsRecording(true);
   };
 
-  // Ensure transcriptRef starts with current saved transcript when beginning to record
-  // so liveTranscript builds correctly and old saved transcript doesn't appear as "live".
+const stopRecording = () => {
+  console.log(
+  "REKAMAN DIHENTIKAN",
+  Date.now()
+);
+  setIsRecording(false);
 
-  const stopRecording = () => {
-    setIsRecording(false);
-    console.debug("[Lexa] stopRecording called", { questionIndex: questionIndexRef.current });
-    if (recognitionRef.current) {
-      stoppingIntentionalRef.current = true;
-      try {
-        // prefer stop() so final results are delivered
-        try { recognitionRef.current.stop(); }
-        catch (e) { recognitionRef.current.abort(); }
-      } catch (err) { console.log(err); }
-      // do not finalize here — onend will handle finalization
+  const recorder = mediaRecorderRef.current;
+
+  if (recorder) {
+    try {
+      recorder.requestData();
+      recorder.stop();
+    } catch (e) {
+      console.error(e);
     }
-  };
+  }
+
+  if (recognitionRef.current) {
+    stoppingIntentionalRef.current = true;
+
+    try {
+      recognitionRef.current.stop();
+    } catch (err) {
+      console.log(err);
+    }
+  }
+};
 
   useEffect(() => {
     return () => {
@@ -1391,7 +1476,6 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
           </div>
         )
       ))}
-      {/* activeQuestion moved below the listening card to appear as next chat bubble */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", width: "100%", marginTop: 24, paddingRight: 20, boxSizing: "border-box", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <div style={styles.userAvatar}>D</div>
@@ -1414,18 +1498,21 @@ function SessionPage({ topic, questions = [], messages: msgProp, isRecording, se
 
 function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRecError, topic, bullets, isLoading }: SessionPagePart2Props) {
   const recognitionRef = useRef<any>(null);
+ 
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const [isFlipped, setIsFlipped] = useState(false);
+  
+
   const topicTitle = topic?.title ?? "Cue Card Topic";
   const topicPrompt = topic?.prompt ?? "Describe the topic naturally and cover all bullet points.";
   const bulletItems = bullets ?? (topic ? getBulletsFromTopic(topic) : []);
 
-  // 1. TAMBAHKAN USEEFFECT CLEANUP (SANGAT PENTING!)
-  // Menjamin jika user pindah halaman atau sesi selesai, mikrofon diputus paksa
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
         try {
-          recognitionRef.current.abort(); // Putus paksa koneksi mic
+          recognitionRef.current.abort();
         } catch (e) {
           console.error(e);
         }
@@ -1437,11 +1524,11 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   const startRecording = async () => {
     setRecError(null);
     setTranscript(""); setLiveTranscript(""); setInterimTranscript("");
+   
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
-    // Pastikan jika ada instance lama yang masih menggantung, kita matikan dulu
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch { }
     }
@@ -1463,7 +1550,6 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
       setLiveTranscript(transcript + finalResult + interimResult);
     };
 
-    // Tambahkan handler onend untuk mengamankan state jika mic mati otomatis oleh sistem
     recognition.onend = () => {
       setIsRecording(false);
     };
@@ -1472,13 +1558,11 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
     setIsRecording(true);
   };
 
-  // 2. PERBARUI FUNGSI STOP RECORDING
   const stopRecording = () => {
     setIsRecording(false);
     if (recognitionRef.current) {
       try {
-        // Menggunakan abort() alih-alih stop() agar mikrofon langsung mati seketika
-        recognitionRef.current.abort();
+        recognitionRef.current.stop(); // Fix: Menggunakan stop() agar data kata-kata terakhir terproses penuh
       } catch (e) {
         console.error("Gagal menghentikan perekaman:", e);
       }
@@ -1486,12 +1570,8 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
     }
   };
 
-
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", width: "100%" }}>
-
-      {/* 1. Sisi Lexa (Kiri) - Bubble Pembuka / Feedback Instan */}
       <div style={styles.lexaBubbleWrap}>
         <LexaAvatar />
         <div>
@@ -1509,9 +1589,8 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
         </div>
       </div>
 
-      {/* 2. CONTAINER UTAMA UNTUK INTERAKTIF FLIP 3D */}
       <div
-        onClick={() => setIsFlipped(!isFlipped)} // Klik di mana saja pada area kartu untuk membalikkan posisi
+        onClick={() => setIsFlipped(!isFlipped)}
         style={{
           perspective: "1000px",
           width: "calc(100% - 50px)",
@@ -1529,7 +1608,6 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
           transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)"
         }}>
 
-          {/* ==================== SISI DEPAN: CUE CARD OPEN ==================== */}
           <div style={{
             position: "absolute",
             width: "100%",
@@ -1575,13 +1653,12 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
             </div>
           </div>
 
-          {/* ==================== SISI BELAKANG: CUE CARD CLOSED (RECORDING) ==================== */}
           <div style={{
             position: "absolute",
             width: "100%",
             height: "100%",
             backfaceVisibility: "hidden",
-            transform: "rotateY(180deg)", // Sisi belakang dibalik secara default agar terlihat pas saat diputar
+            transform: "rotateY(180deg)",
             background: "#ffffff",
             border: "1px solid #fecaca",
             borderRadius: "16px",
@@ -1592,16 +1669,14 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
             flexDirection: "column",
             justifyContent: "space-between"
           }}>
-            {/* Header Status Closed */}
             <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
               <span style={{ fontSize: "14px", fontWeight: 600, color: "#991b1b" }}>Cue Card Closed</span>
             </div>
 
-            {/* Bulatan Mikrofon Tengah Menyerupai Gelombang Ring Merah */}
             <div style={{ display: "flex", justifyContent: "center", alignItems: "center", flex: 1, position: "relative" }}>
               <div
                 onClick={(e) => {
-                  e.stopPropagation(); // Mencegah kartu tidak sengaja terbalik kembali saat menekan mikrofon
+                  e.stopPropagation();
                   isRecording ? stopRecording() : startRecording();
                 }}
                 style={{
@@ -1616,16 +1691,14 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
                   boxShadow: isRecording ? "0 0 20px rgba(239, 68, 68, 0.2)" : "none"
                 }}
               >
-                {/* Ikon mic sederhana */}
                 <svg width="40" height="40" viewBox="0 0 24 24" fill={isRecording ? "#ef4444" : "#9ca3af"}>
                   <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
                 </svg>
               </div>
             </div>
 
-            {/* Box Audio Transcription Internal di Sisi Bawah Kartu */}
             <div
-              onClick={(e) => e.stopPropagation()} // Supaya saat blok teks diseleksi, kartu tidak berputar kembali
+              onClick={(e) => e.stopPropagation()}
               style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px", minHeight: "120px" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", color: "#6b7280", fontSize: "14px" }}>
@@ -1641,14 +1714,12 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
         </div>
       </div>
 
-      {/* 3. Label Profil User Tetap Berada Di Bawah Kanan Luar Kartu */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", width: "100%", paddingRight: "20px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -8 }}>
           <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>davinzata</span>
           <div style={styles.userAvatar}>D</div>
         </div>
       </div>
-
     </div>
   );
 }
@@ -1656,6 +1727,8 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
 function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, assignmentId, audioUrl }: ResultPageProps) {
   const [evaluation, setEvaluation] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [isRecording, setIsRecording] = useState(false);
+const [recError, setRecError] = useState(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [finalTestSummary, setFinalTestSummary] = useState<{
@@ -1672,6 +1745,10 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, 
     components: Array<{ label: string; score: string; description: string }>;
   }> | null>(null);
   const [finalTestLoading, setFinalTestLoading] = useState(false);
+ 
+  useState(false);
+  
+  
   const [finalTestError, setFinalTestError] = useState<string | null>(null);
   const hasSavedRef = useRef(false);
   const hasSavedFinalSummaryRef = useRef(false);
@@ -1732,11 +1809,10 @@ function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, 
     };
   }, [partLabel, rubricItems, topic?.prompt, topic?.title, transcript]);
 
-useEffect(() => {
+  useEffect(() => {
     let cancelled = false;
 
     const loadTestSummary = async () => {
-      // 1. Ambil data user auth resmi langsung di sini biar ga ada error 'userData' undefined
       const { data: authData, error: authError } = await supabase.auth.getUser();
       if (authError || !authData?.user?.id) {
         console.log("❌ Gagal mendapatkan ID user dari auth Supabase");
@@ -1744,7 +1820,6 @@ useEffect(() => {
       }
       const currentUserId = authData.user.id;
 
-      // 2. Tahan simpan jika ulasan teks panjang dari AI belum siap masuk state
       if (analysisLoading || !evaluation || !evaluation.analysis) {
         console.log("⏳ Menunggu AI selesai menyusun ulasan teks panjang...");
         return;
@@ -1829,7 +1904,6 @@ useEffect(() => {
         });
 
         if (insertError) throw insertError;
-        console.log("✅ FIX BERHASIL! DATA UTUH MASUK SUPABASE!");
 
       } catch (err: any) {
         console.error("❌ ERROR DI LOAD TEST SUMMARY:", err);
@@ -1853,6 +1927,7 @@ useEffect(() => {
       cancelled = true;
     };
   }, [analysisLoading, evaluation, mode, partIndex, transcript, unitIndex, finalTestSummary]);
+
   useEffect(() => {
     const persistResult = async () => {
       if (analysisLoading || !evaluation || !transcript.trim() || hasSavedRef.current) {
@@ -1878,11 +1953,6 @@ useEffect(() => {
         text: metric.text,
       }));
 
-      console.log(
-        "RESULT PAGE METRICS",
-        JSON.stringify(metricPayload, null, 2)
-      );
-
       const { data: userData, error: userError } = await supabase.auth.getUser();
       if (userError || !userData.user) {
         setSaveStatus("error");
@@ -1900,7 +1970,8 @@ useEffect(() => {
         hasSavedRef.current = false;
         return;
       }
-
+console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
+      // Fix: Jika mode adalah "learn", data disimpan otomatis di block ini.
       const response = await fetch("/api/student-practice-progress", {
         method: "POST",
         headers: {
@@ -1917,9 +1988,9 @@ useEffect(() => {
           analysis: JSON.parse(JSON.stringify({ text: evaluation.analysis })),
           notes: evaluation.recommendation ?? null,
           metrics: metricPayload,
-          attempt_type: "test",
+          attempt_type: mode === "test" ? "test" : "practice",
           assignment_id: assignmentId ?? null,
-          audio_url: audioUrl ?? null,
+          audio_url: audioUrl || null,
         }),
       });
 
@@ -1935,16 +2006,14 @@ useEffect(() => {
       const refreshKey = "lexa:practice-progress-updated";
       try {
         localStorage.setItem(refreshKey, String(Date.now()));
-      } catch {
-        // Ignore storage failures and still notify this tab.
-      }
+      } catch {}
       window.dispatchEvent(new Event(refreshKey));
 
       setSaveStatus("saved");
     };
 
     void persistResult();
-  }, [analysisLoading, evaluation, partIndex, transcript, unitIndex]);
+  }, [analysisLoading, evaluation, partIndex, transcript, unitIndex, mode, assignmentId, audioUrl]);
 
   const scoreData: EvaluationResult = evaluation ?? {
     overall: "-",
@@ -1954,11 +2023,10 @@ useEffect(() => {
     analysis: "AI analysis will appear after the transcript is processed.",
   };
 
-const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
+  const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
   let testScoreData: EvaluationResult | null = null;
   if (isFinalTestResult && finalTestSummary) {
     testScoreData = {
-      // Ambil overallScore dari JSON lu (pake fallback ke finalTestSummary kalau kosong)
       overall: evaluation?.overallScore || finalTestSummary.overall.toFixed(1),
       level: evaluation?.level || `Final Test Band ${finalTestSummary.overall.toFixed(1)}`,
       metrics: [
@@ -1966,8 +2034,6 @@ const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partInd
         { id: "part2", label: "Part 2", score: finalTestSummary.part2.toFixed(1), text: "Included in the final average." },
         { id: "part3", label: "Part 3", score: finalTestSummary.part3.toFixed(1), text: "Included in the final average." },
       ],
-      
-      // 🌟 SESUAIKAN DENGAN PROPERTI JSON LU:
       recommendation: evaluation?.recommendation || "Ulangi test untuk membandingkan skor akhir terbaru.",
       analysis: evaluation?.analysis || "Gagal memuat analisis AI.",
     };
