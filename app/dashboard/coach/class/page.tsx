@@ -405,7 +405,7 @@ export default function ClassPage() {
         </div>
 
         {/* Create Button */}
-        <div className="mb-8 flex justify-start">
+        <div className="mb-8 flex flex-wrap items-center gap-3 justify-start">
           <TextButton
             variant="primary"
             onClick={() => setShowCreateForm(true)}
@@ -413,6 +413,13 @@ export default function ClassPage() {
           >
             <PlusIcon weight="bold" size={20} />
             Create New Class
+          </TextButton>
+          <TextButton
+            variant="secondary"
+            onClick={() => router.push("/dashboard/coach/class/report")}
+            className="flex items-center gap-2"
+          >
+            Class Report
           </TextButton>
         </div>
 

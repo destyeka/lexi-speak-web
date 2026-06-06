@@ -68,6 +68,7 @@ interface ResultPageProps {
   partIndex: number;
   mode?: "learn" | "test" | null;
   assignmentId?: string | null;
+  audioUrl?: string | null;
 }
 
 interface MetricData {
@@ -847,7 +848,7 @@ const submitAssignment = async () => {
           />
         )}
         
-        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} assignmentId={assignmentId} />}
+        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
         {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
         
         {/* ==================== PART 2 SESSION ==================== */}
@@ -870,7 +871,7 @@ const submitAssignment = async () => {
           />
         )}
         
-        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} assignmentId={assignmentId} />}
+        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
         {page === PAGES.PART3_INTRO && (
           <IntroPagePart3
             topic={part3Topic}
@@ -902,7 +903,7 @@ const submitAssignment = async () => {
           />
         )}
         
-        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} assignmentId={assignmentId} />}
+        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
       </main>
 
       {/* Footer Utama */}
@@ -1652,7 +1653,7 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   );
 }
 
-function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, assignmentId }: ResultPageProps) {
+function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, assignmentId, audioUrl }: ResultPageProps) {
   const [evaluation, setEvaluation] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
