@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
+import { Suspense } from "react";
 
 import { AnalysisCard } from "@/components/ui/system/AnalysisCard";
 import { supabase } from "@/lib/supabase";
@@ -343,7 +344,7 @@ console.log("==========");
   }
 }
 
-export default function LexaPracticeSession() {
+function LexaPracticeSessionContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [page, setPage] = useState<PageValue>(PAGES.INTRO);
@@ -2735,3 +2736,11 @@ const css = `
     100% { transform: scale(0.9); opacity: 0.6; }
   }
 `
+
+export default function LexaPracticeSession() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <LexaPracticeSessionContent />
+    </Suspense>
+  );
+}
