@@ -27,6 +27,12 @@ interface Assignment {
   created_at: string | null;
 }
 
+type ScoreHistoryRow = {
+  student_id: string;
+  score: number;
+  recorded_at: string;
+};
+
 interface Question {
   id: string;
   type?: "question" | "bullet" | string;
@@ -860,7 +866,7 @@ export default function ClassAssignmentsPage() {
     setEditTitle(assignment.title);
     setEditDescription(assignment.description || "");
     setEditPart(assignment.part ?? 1);
-    
+
     if (assignment.start_at) {
       const startDate = new Date(assignment.start_at);
       setEditStartAt(formatLocalDate(startDate));
@@ -869,7 +875,7 @@ export default function ClassAssignmentsPage() {
       setEditStartAt("");
       setEditStartTime("00:00");
     }
-    
+
     if (assignment.due_at) {
       const dueDate = new Date(assignment.due_at);
       setEditDueAt(formatLocalDate(dueDate));
@@ -878,7 +884,7 @@ export default function ClassAssignmentsPage() {
       setEditDueAt("");
       setEditDueTime("23:59");
     }
-    
+
     setEditActive(assignment.is_active);
 
     const { data, error } = await supabase
@@ -1495,9 +1501,9 @@ export default function ClassAssignmentsPage() {
                                       prev.map((item, idx) =>
                                         idx === index
                                           ? {
-                                              ...item,
-                                              details: item.details.map((d, di) => (di === detailIndex ? { ...d, content: value } : d)),
-                                            }
+                                            ...item,
+                                            details: item.details.map((d, di) => (di === detailIndex ? { ...d, content: value } : d)),
+                                          }
                                           : item
                                       )
                                     );
@@ -1519,9 +1525,9 @@ export default function ClassAssignmentsPage() {
                                           prev.map((item, idx) =>
                                             idx === index
                                               ? {
-                                                  ...item,
-                                                  details: item.details.map((d, di) => (di === detailIndex ? { ...d, rubric: value } : d)),
-                                                }
+                                                ...item,
+                                                details: item.details.map((d, di) => (di === detailIndex ? { ...d, rubric: value } : d)),
+                                              }
                                               : item
                                           )
                                         );
@@ -1542,18 +1548,18 @@ export default function ClassAssignmentsPage() {
                               prev.map((item, idx) =>
                                 idx === index
                                   ? {
-                                      ...item,
-                                      details: [
-                                        ...item.details,
-                                        {
-                                          type: part.part === 2 ? "bullet" : "question",
-                                          content: "",
-                                          prompt: "",
-                                          rubric: "",
-                                          order_index: item.details.length,
-                                        },
-                                      ],
-                                    }
+                                    ...item,
+                                    details: [
+                                      ...item.details,
+                                      {
+                                        type: part.part === 2 ? "bullet" : "question",
+                                        content: "",
+                                        prompt: "",
+                                        rubric: "",
+                                        order_index: item.details.length,
+                                      },
+                                    ],
+                                  }
                                   : item
                               )
                             );
@@ -1734,15 +1740,14 @@ export default function ClassAssignmentsPage() {
                                 <td className="px-5 py-4 text-sm font-medium">{student.email}</td>
                                 <td className="px-5 py-4 text-sm">
                                   <span
-                                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                      student.status === 'submitted'
+                                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${student.status === 'submitted'
                                         ? 'bg-green-100 text-green-800'
                                         : student.status === 'in_progress'
-                                        ? 'bg-yellow-100 text-yellow-800'
-                                        : student.status === 'pending'
-                                        ? 'bg-gray-100 text-gray-800'
-                                        : 'bg-red-100 text-red-800'
-                                    }`}
+                                          ? 'bg-yellow-100 text-yellow-800'
+                                          : student.status === 'pending'
+                                            ? 'bg-gray-100 text-gray-800'
+                                            : 'bg-red-100 text-red-800'
+                                      }`}
                                   >
                                     {student.status === 'Not Started' ? 'Not Started' : student.status.replace('_', ' ')}
                                   </span>
@@ -1758,11 +1763,10 @@ export default function ClassAssignmentsPage() {
                                     type="button"
                                     disabled={!canViewDetail}
                                     onClick={() => canViewDetail && openSummaryModal(student)}
-                                    className={`inline-flex items-center justify-center rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                                      canViewDetail
+                                    className={`inline-flex items-center justify-center rounded-lg border px-3 py-2 text-xs font-semibold transition ${canViewDetail
                                         ? 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
                                         : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                                    }`}
+                                      }`}
                                   >
                                     View Detail
                                   </button>
