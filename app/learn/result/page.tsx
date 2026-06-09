@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { Suspense } from "react";
 
 interface ScoreHistoryRow {
   id: number;
@@ -24,7 +25,7 @@ function formatBand(score: number | string | undefined): string {
   return isNaN(num) ? "-" : num.toFixed(1);
 }
 
-export default function LearnResultPage() {
+function LearnResultPageContent() {
   const searchParams = useSearchParams();
   const isAssignment =
   !!searchParams.get("assignmentId");
@@ -475,5 +476,13 @@ return (
         )}
       </div>
     </main>
+  );
+}
+
+export default function LearnResultPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <LearnResultPageContent />
+    </Suspense>
   );
 }
