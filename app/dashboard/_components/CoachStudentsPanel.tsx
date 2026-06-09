@@ -8,6 +8,7 @@ import flatpickr from "flatpickr";
 import "flatpickr/dist/flatpickr.min.css";
 import { supabase } from "@/lib/supabase";
 import { CalenderIcon } from "@/icons";
+import ScoreHistoryRow from "../../learn/result/page";
 
 const ReactApexChart = dynamic(() => import("react-apexcharts"), {
   ssr: false,
