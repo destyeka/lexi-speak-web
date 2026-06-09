@@ -19,7 +19,8 @@ type PracticeProgressPayload = {
   assignment_id?: string | null;
   analysis?: Record<string, unknown> | null;
   attempt_type?: "practice" | "test";
-  audio_url?: string | null;
+  audio_url?: string[] | null;
+  test_session_id?: string | null;
 };
 
 export const runtime = "nodejs";
@@ -50,6 +51,9 @@ export async function POST(request: Request) {
     // Perangkap aman penangkap 'notes' atau 'recommendation' dari frontend page learn
     const notes = body.notes || (body as any).recommendation || null;
     const metrics = Array.isArray(body.metrics) ? body.metrics : [];
+    const testSessionId = typeof body.test_session_id === "string"
+    ? body.test_session_id
+    : null;
     
     console.log(
       "API RECEIVED METRICS",
@@ -61,9 +65,9 @@ export async function POST(request: Request) {
     const analysis = body.analysis && typeof body.analysis === "object" ? body.analysis : null;
     const attemptType = body.attempt_type === "test" ? "test" : "practice";
     const audioUrl =
-    typeof body.audio_url === "string"
-      ? body.audio_url
-      : null;
+  Array.isArray(body.audio_url)
+    ? body.audio_url
+    : null;
 
     if (!Number.isFinite(latestScore) || !Number.isFinite(progressPercent) || !Number.isFinite(lastPartIndex) || !lastActivityAt) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -107,6 +111,7 @@ const { error: rpcError } = await supabase.rpc("save_student_practice_progress",
   analysis,
   attempt_type: attemptType,
     audio_url: audioUrl,
+     test_session_id:testSessionId
 });
     if (!rpcError) {
       console.log("RPC SUCCESS");

@@ -23,6 +23,7 @@ interface PageMap {
   PART3_INTRO: "part3_intro";
   PART3_SESSION: "part3_session";
   PART3_RESULT: "part3_result";
+  FINAL_RESULT: "FINAL_RESULT",
 }
 interface ChatMessage { role: string; text: string; }
 
@@ -41,7 +42,8 @@ interface SessionPageProps {
   interimTranscript: string;
   setInterimTranscript: React.Dispatch<React.SetStateAction<string>>;
   onSaveQuestionTranscripts?: (arr: string[]) => void;
-  setAudioUrl?: (url: string) => void;
+  setAudioUrl?: React.Dispatch<React.SetStateAction<string[]>>;
+  testSessionId?: string | null;
 
 }
 
@@ -60,7 +62,8 @@ interface SessionPagePart2Props {
   topic: Topic | null;
   bullets?: string[];
   isLoading?: boolean;
-  setAudioUrl?: (url: string) => void;
+  setAudioUrl?: React.Dispatch<React.SetStateAction<string[]>>;
+  testSessionId?: string | null;
 
 }
 
@@ -69,10 +72,11 @@ interface ResultPageProps {
   topic: Topic | null;
   partLabel: string;
   unitIndex: number | null;
-  partIndex: number;
+  partIndex: number | null;
   mode?: "learn" | "test" | null;
   assignmentId?: string | null;
-  audioUrl?: string | null;
+  audioUrl?: string[] | null;
+  testSessionId?: string | null;
 }
 
 interface MetricData {
@@ -115,7 +119,8 @@ const PAGES: PageMap = {
   PART2_RESULT: "part2_result",
   PART3_INTRO: "part3_intro",
   PART3_SESSION: "part3_session",
-  PART3_RESULT: "part3_result"
+  PART3_RESULT: "part3_result",
+  FINAL_RESULT: "FINAL_RESULT"
 };
 
 type PageValue = PageMap[keyof PageMap];
@@ -166,6 +171,8 @@ function DetailBubbleList({
   );
 }
 
+
+
 async function persistPracticeResult({
   transcript,
   topic,
@@ -174,6 +181,8 @@ async function persistPracticeResult({
   unitIndex,
   assignmentId,
   audioUrl,
+  mode,
+  testSessionId
 }: {
   transcript: string;
   topic: Topic | null;
@@ -181,7 +190,9 @@ async function persistPracticeResult({
   partIndex: number;
   unitIndex: number | null;
   assignmentId?: string | null;
-  audioUrl?: string | null;
+   audioUrl?: string[] | null;
+  mode?: "learn" | "test" | null;
+  testSessionId?: string | null;
 }) {
   const trimmedTranscript = transcript.trim();
   if (!trimmedTranscript) return;
@@ -210,7 +221,15 @@ async function persistPracticeResult({
   if (!response.ok) return;
 
   const evaluation = (await response.json()) as any;
+  console.log("==========");
+console.log("PART =", partIndex);
+console.log("TRANSCRIPT =", trimmedTranscript);
+console.log("EVALUATION =", evaluation);
+console.log("OVERALL =", evaluation?.overall);
+console.log("==========");
+ 
   const latestScore = Number(evaluation.overall);
+    
   if (!Number.isFinite(latestScore)) return;
 
   const progressPercent = Number(Math.max(0, Math.min(100, (latestScore / 9) * 100)).toFixed(1));
@@ -255,8 +274,9 @@ async function persistPracticeResult({
       metrics: metricPayload,
       assignment_id: assignmentId ?? null,
       analysis: analysisPayload,
-      attempt_type: "practice",
+      attempt_type: mode === "test" ? "test" : "practice",
       audio_url: audioUrl ?? null,
+      test_session_id: testSessionId
     }),
   });
 
@@ -310,7 +330,7 @@ async function persistPracticeResult({
                 status: "submitted",
                 submitted_at: submittedAt,
                 updated_at: submittedAt,
-                audio_url: audioUrl,
+                audio_url: audioUrl ?? null,
               },
             ], { onConflict: "assignment_id,student_id" });
         } else {
@@ -328,11 +348,21 @@ export default function LexaPracticeSession() {
   const searchParams = useSearchParams();
   const [page, setPage] = useState<PageValue>(PAGES.INTRO);
   const [time, setTime] = useState(0);
-  const [audioUrl, setAudioUrl] = useState<string>("");
+
+ const [part1AudioUrl, setPart1AudioUrl] = useState<string[]>([]);
+  useEffect(() => {
+    console.log(
+      "PART1 AUDIO STATE =",
+      part1AudioUrl
+    );
+  }, [part1AudioUrl]);
+  const [part2AudioUrl, setPart2AudioUrl] = useState<string[]>([]);
+  const [part3AudioUrl, setPart3AudioUrl] = useState<string[]>([]);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
 
-  
+
   const [recError, setRecError] = useState<string | null>(null);
   const [interimTranscript, setInterimTranscript] = useState("");
   const [liveTranscript, setLiveTranscript] = useState("");
@@ -345,6 +375,7 @@ export default function LexaPracticeSession() {
   const [transcriptPart1, setTranscriptPart1] = useState("");
   const [transcriptPart2, setTranscriptPart2] = useState("");
 
+  const [testSessionId, setTestSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [assignmentActionStatus, setAssignmentActionStatus] = useState<"idle" | "saving" | "saved" | "error" | "submitted">("idle");
@@ -490,17 +521,23 @@ export default function LexaPracticeSession() {
       },
     ];
 
-  const startSession = () => {
-    if (isAssignmentLocked) return;
-    setTime(5 * 60);
-    setIsListening(true);
-    setIsRecording(false);
-    setRecError(null);
-    setInterimTranscript("");
-    setTranscriptPart1("");
-    setLiveTranscript("");
-    setPage(PAGES.SESSION);
-  };
+
+   const startSession = () => {
+  if (isAssignmentLocked) return;
+
+  if (mode === "test") {
+    setTestSessionId(crypto.randomUUID());
+  }
+
+  setTime(5 * 60);
+  setIsListening(true);
+  setIsRecording(false);
+  setRecError(null);
+  setInterimTranscript("");
+  setTranscriptPart1("");
+  setLiveTranscript("");
+  setPage(PAGES.SESSION);
+};
 
   const startPart2Session = () => {
     if (isAssignmentLocked) return;
@@ -526,8 +563,16 @@ export default function LexaPracticeSession() {
     setPage(PAGES.PART3_SESSION);
   };
 
-  const finishSession = () => {
-    setIsListening(false);
+  
+
+
+   const finishSession = async () => {
+  if (isUploadingAudio) {
+    alert("Mohon tunggu, audio masih diupload...");
+    return;
+  }
+
+  setIsListening(false);
   setIsRecording(false);
 
 
@@ -540,25 +585,56 @@ export default function LexaPracticeSession() {
     };
 
     if (page === PAGES.PART3_SESSION) {
-      const finalTranscript = appendIfMissing(transcriptPart3, setTranscriptPart3, remainingText);
-      if (isAssignment) {
-        void saveAssignmentProgress();
-      }
-      setPage(PAGES.PART3_RESULT);
-    } else if (page === PAGES.PART2_SESSION) {
+  const finalTranscript = appendIfMissing(
+    transcriptPart3,
+    setTranscriptPart3,
+    remainingText
+  );
+
+  console.log("PART1 AUDIO BEFORE SAVE =", part1AudioUrl);
+console.log("PART2 AUDIO BEFORE SAVE =", part2AudioUrl);
+console.log("PART3 AUDIO BEFORE SAVE =", part3AudioUrl);
+
+  if (mode === "test") {
+    await persistPracticeResult({
+      transcript: finalTranscript,
+  topic: part3Topic,
+  partLabel: "Part 3",
+  partIndex: 3,
+  unitIndex: resolvedUnitIndex,
+  assignmentId,
+  audioUrl: part3AudioUrl,
+  mode,
+  testSessionId,
+});
+  } else if (isAssignment) {
+    void saveAssignmentProgress();
+  }
+
+    if (mode === "test") {
+    setPage(PAGES.FINAL_RESULT);
+  } else {
+    setPage(PAGES.PART3_RESULT);
+  }
+
+
+} else if (page === PAGES.PART2_SESSION) {
       const finalTranscript = appendIfMissing(transcriptPart2, setTranscriptPart2, remainingText);
       if (mode === "test") {
-        void persistPracticeResult({
-          transcript: finalTranscript,
-          topic: part2Topic,
-          partLabel: "Part 2",
-          partIndex: 2,
-          unitIndex: resolvedUnitIndex,
-          assignmentId: assignmentId,
-          audioUrl: audioUrl || null,
-        });
-        setPage(PAGES.PART3_INTRO);
-      } else if (isAssignment) {
+      await persistPracticeResult({
+        transcript: finalTranscript,
+        topic: part2Topic,
+        partLabel: "Part 2",
+        partIndex: 2,
+        unitIndex: resolvedUnitIndex,
+        assignmentId,
+        audioUrl: part2AudioUrl,
+        mode,
+        testSessionId,
+      });
+
+      setPage(PAGES.PART3_INTRO);
+    } else if (isAssignment) {
         void saveAssignmentProgress();
         if (part3Topic) setPage(PAGES.PART3_INTRO);
         else setPage(PAGES.PART2_RESULT);
@@ -568,25 +644,47 @@ export default function LexaPracticeSession() {
     } else {
       const finalTranscript = appendIfMissing(transcriptPart1, setTranscriptPart1, remainingText);
       if (mode === "test") {
-        void persistPracticeResult({
-          transcript: finalTranscript,
-          topic: part1Topic,
-          partLabel: "Part 1",
-          partIndex: 1,
-          unitIndex: resolvedUnitIndex,
-          assignmentId: assignmentId,
-          audioUrl: audioUrl || null,
-        });
-        setPage(PAGES.PART2_INTRO);
-      } else if (isAssignment) {
+          await persistPracticeResult({
+            transcript: finalTranscript,
+            topic: part1Topic,
+            partLabel: "Part 1",
+            partIndex: 1,
+            unitIndex: resolvedUnitIndex,
+            assignmentId,
+            audioUrl: part1AudioUrl,
+            mode,
+            testSessionId,
+          });
+
+          
+
+          setPage(PAGES.PART2_INTRO);
+        } else if (isAssignment) {
         void saveAssignmentProgress();
         if (part2Topic) setPage(PAGES.PART2_INTRO);
         else setPage(PAGES.RESULT);
       } else {
         setPage(PAGES.RESULT);
       }
-      console.log("audioUrl:", audioUrl);
+      console.log("PART1 AUDIO:", part1AudioUrl);
+console.log("PART2 AUDIO:", part2AudioUrl);
+console.log("PART3 AUDIO:", part3AudioUrl);
     }
+
+    console.log(
+  "SAVE PART1 AUDIO =",
+  JSON.stringify(part1AudioUrl)
+);
+
+console.log(
+  "SAVE PART2 AUDIO =",
+  JSON.stringify(part2AudioUrl)
+);
+
+console.log(
+  "SAVE PART3 AUDIO =",
+  JSON.stringify(part3AudioUrl)
+);
 
     setLiveTranscript("");
     setInterimTranscript("");
@@ -605,10 +703,35 @@ export default function LexaPracticeSession() {
     setPage(PAGES.INTRO);
   };
 
-  const finishAllSession = () => {
-    restartSession();
-    router.push("/dashboard");
-  };
+ const finishAllSession = async () => {
+  const allTranscript = [
+    transcriptPart1,
+    transcriptPart2,
+    transcriptPart3,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const allAudio = [
+    ...part1AudioUrl,
+    ...part2AudioUrl,
+    ...part3AudioUrl,
+  ];
+
+  await persistPracticeResult({
+    transcript: allTranscript,
+    topic: null,
+    partLabel: "Full Test",
+    partIndex: 0,
+    unitIndex: resolvedUnitIndex,
+    assignmentId,
+    audioUrl: allAudio,
+    mode,
+    testSessionId
+  });
+
+  setPage(PAGES.FINAL_RESULT);
+};
 
   useEffect(() => {
     if (page === PAGES.SESSION || page === PAGES.PART2_SESSION || page === PAGES.PART3_SESSION) {
@@ -653,17 +776,32 @@ export default function LexaPracticeSession() {
     setAssignmentActionStatus("saving");
     setAssignmentActionError(null);
     try {
-      const topic = getCurrentAssignmentTopic();
-      const transcript = currentAssignmentPart === 2 ? transcriptPart2 : currentAssignmentPart === 3 ? transcriptPart3 : transcriptPart1;
+    const topic = getCurrentAssignmentTopic();
+     const transcript =
+      currentAssignmentPart === 2
+        ? transcriptPart2
+        : currentAssignmentPart === 3
+          ? transcriptPart3
+          : transcriptPart1;
+
+   const currentAudioUrl =
+  currentAssignmentPart === 1
+    ? part1AudioUrl
+    : currentAssignmentPart === 2
+    ? part2AudioUrl
+    : part3AudioUrl;
+
       await persistPracticeResult({
-        transcript,
-        topic,
-        partLabel: `Part ${currentAssignmentPart}`,
-        partIndex: currentAssignmentPart,
-        unitIndex: resolvedUnitIndex,
-        assignmentId: assignmentId,
-        audioUrl: audioUrl,
-      });
+      transcript,
+      topic,
+      partLabel: `Part ${currentAssignmentPart}`,
+      partIndex: currentAssignmentPart,
+      unitIndex: resolvedUnitIndex,
+      assignmentId,
+      audioUrl: currentAudioUrl,
+      mode,
+      testSessionId
+    });
       setAssignmentActionStatus("saved");
       
     } catch (error) {
@@ -673,7 +811,7 @@ export default function LexaPracticeSession() {
       throw error;
     }
   };
-
+  
   const submitAssignment = async () => {
     setAssignmentActionStatus("saving");
     setAssignmentActionError(null);
@@ -684,6 +822,12 @@ export default function LexaPracticeSession() {
       if (userError || !user) {
         throw new Error("Silakan login ulang untuk submit assignment.");
       }
+      const currentAudioUrl =
+  currentAssignmentPart === 1
+    ? part1AudioUrl
+    : currentAssignmentPart === 2
+      ? part2AudioUrl
+      : part3AudioUrl;
       
       let submittedAt = new Date().toISOString();
       let submissionScore = null;
@@ -721,7 +865,7 @@ export default function LexaPracticeSession() {
               updated_at: submittedAt,
               score: submissionScore,
               metrics: submissionMetrics,
-              audio_url: audioUrl,
+              audio_url: currentAudioUrl,
             },
           ], { onConflict: "assignment_id,student_id" });
 
@@ -738,7 +882,7 @@ export default function LexaPracticeSession() {
                 status: "submitted",
                 submitted_at: submittedAt,
                 updated_at: submittedAt,
-                audio_url: audioUrl,
+                audio_url: currentAudioUrl,
               },
             ], { onConflict: "assignment_id,student_id" });
 
@@ -774,6 +918,8 @@ export default function LexaPracticeSession() {
       <header style={styles.header}>
         <button style={styles.backBtn} onClick={() => {
           if (page === PAGES.SESSION) setPage(PAGES.INTRO);
+          console.log("PART1 TRANSCRIPT LENGTH", transcriptPart1.length);
+console.log("PART1 TRANSCRIPT", transcriptPart1);
           if (page === PAGES.PART2_SESSION) setPage(PAGES.PART2_INTRO);
           if (page === PAGES.PART3_SESSION) setPage(PAGES.PART3_INTRO);
         }}>
@@ -829,6 +975,7 @@ export default function LexaPracticeSession() {
             setLiveTranscript={setLiveTranscript} 
             interimTranscript={interimTranscript} 
             setInterimTranscript={setInterimTranscript} 
+            setAudioUrl={setPart1AudioUrl} 
             onSaveQuestionTranscripts={(arr) => {
               const joined = (arr || []).filter(Boolean).join(" ").trim();
               setTranscriptPart1((prev) => prev === joined ? prev : joined);
@@ -837,7 +984,19 @@ export default function LexaPracticeSession() {
           />
         )}
         
-        {page === PAGES.RESULT && <ResultPage transcript={transcriptPart1} topic={part1Topic} partLabel="Part 1" unitIndex={resolvedUnitIndex} partIndex={1} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
+        {page === PAGES.RESULT && (
+  <ResultPage
+    transcript={transcriptPart1}
+    topic={part1Topic}
+    partLabel="Part 1"
+    unitIndex={resolvedUnitIndex}
+    partIndex={1}
+    mode={mode}
+    assignmentId={assignmentId}
+    audioUrl={part1AudioUrl}
+    testSessionId={testSessionId}
+  />
+)}
         {page === PAGES.PART2_INTRO && <IntroPagePart2 topic={part2Topic} bullets={part2Bullets} />}
         
  {page === PAGES.PART2_SESSION && (
@@ -857,7 +1016,7 @@ export default function LexaPracticeSession() {
       topic={part2Topic}
       bullets={part2Bullets}
       isLoading={isTopicsLoading}
-      setAudioUrl={setAudioUrl}
+      setAudioUrl={setPart2AudioUrl}
       
     />
 
@@ -865,7 +1024,19 @@ export default function LexaPracticeSession() {
   </>
 )}
         
-        {page === PAGES.PART2_RESULT && <ResultPage transcript={transcriptPart2} topic={part2Topic} partLabel="Part 2" unitIndex={resolvedUnitIndex} partIndex={2} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
+        {page === PAGES.PART2_RESULT && (
+  <ResultPage
+    transcript={transcriptPart2}
+    topic={part2Topic}
+    partLabel="Part 2"
+    unitIndex={resolvedUnitIndex}
+    partIndex={2}
+    mode={mode}
+    assignmentId={assignmentId}
+    audioUrl={part2AudioUrl}
+    testSessionId={testSessionId}
+  />
+)}
         {page === PAGES.PART3_INTRO && (
           <IntroPagePart3
             topic={part3Topic}
@@ -890,7 +1061,7 @@ export default function LexaPracticeSession() {
       setLiveTranscript={setLiveTranscript}
       interimTranscript={interimTranscript}
       setInterimTranscript={setInterimTranscript}
-      setAudioUrl={setAudioUrl}
+      setAudioUrl={setPart3AudioUrl}
       onSaveQuestionTranscripts={(arr) => {
         const joined = (arr || [])
           .filter(Boolean)
@@ -907,7 +1078,42 @@ export default function LexaPracticeSession() {
   </>
 )}
         
-        {page === PAGES.PART3_RESULT && <ResultPage transcript={transcriptPart3} topic={part3Topic} partLabel="Part 3" unitIndex={resolvedUnitIndex} partIndex={3} mode={mode} assignmentId={assignmentId} audioUrl={audioUrl} />}
+        {page === PAGES.PART3_RESULT && (
+  <ResultPage
+    transcript={transcriptPart3}
+    topic={part3Topic}
+    partLabel="Part 3"
+    unitIndex={resolvedUnitIndex}
+    partIndex={3}
+    mode={mode}
+    assignmentId={assignmentId}
+    audioUrl={part3AudioUrl}
+    testSessionId={testSessionId}
+  />
+)}
+        {page === PAGES.FINAL_RESULT && (
+  <ResultPage
+    transcript={[
+      transcriptPart1,
+      transcriptPart2,
+      transcriptPart3,
+    ]
+      .filter(Boolean)
+      .join("\n\n")}
+    topic={null}
+    partLabel="Full Test"
+    unitIndex={resolvedUnitIndex}
+    partIndex={0}
+    mode={mode}
+    assignmentId={assignmentId}
+    audioUrl={[
+      ...part1AudioUrl,
+      ...part2AudioUrl,
+      ...part3AudioUrl,
+    ]}
+    testSessionId={testSessionId}
+  />
+)}
       </main>
 
       <footer style={styles.footer}>
@@ -954,6 +1160,25 @@ export default function LexaPracticeSession() {
               </button>
             </div>
           </>
+          ) : page === PAGES.FINAL_RESULT ? (
+  <>
+    <button
+      style={{ background: "none", border: "none", cursor: "pointer" }}
+      onClick={restartSession}
+    >
+      Save Progress
+    </button>
+
+    <button
+      style={{
+        ...styles.startBtn,
+        background: "linear-gradient(135deg, #f87171, #ef4444)"
+      }}
+      onClick={finishAllSession}
+    >
+      Save & Finish All
+    </button>
+  </>
         ) : page === PAGES.PART3_RESULT ? (
           <>
             <button style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#C95B5B", fontWeight: 600, padding: "10px 0" }} onClick={restartSession}>
@@ -963,7 +1188,7 @@ export default function LexaPracticeSession() {
               Save &amp; Finish All
             </button>
           </>
-        ) : (
+        ) : ( 
           <>
             <button style={styles.cancelBtn} onClick={() => setPage(PAGES.INTRO)}> Cancel </button>
             {assignmentActionStatus === 'submitted' ? (
@@ -983,7 +1208,7 @@ export default function LexaPracticeSession() {
               <button 
                 style={hasSpoken ? styles.startBtn : { ...styles.startBtn, background: "#d1d5db", color: "#9ca3af", boxShadow: "none", cursor: "not-allowed" }} 
                 onClick={hasSpoken ? finishSession : undefined} 
-                disabled={!hasSpoken} 
+                disabled={!hasSpoken || isUploadingAudio}
               > 
                 Finish Session 
               </button> 
@@ -1121,11 +1346,13 @@ function SessionPage({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const isStoppingRef = useRef(false);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const stoppingIntentionalRef = useRef(false);
   const transcriptRef = useRef<string>("");
   const [questionIndex, setQuestionIndex] = useState(0);
   const questionIndexRef = useRef<number>(0);
   const [questionTranscripts, setQuestionTranscripts] = useState<string[]>([]);
+  const [testSessionId, setTestSessionId] = useState<string | null>(null);
   const perQuestionAccumRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -1219,6 +1446,7 @@ const advanceQuestion = () => {
   };
 
   const startRecording = async () => {
+    audioChunksRef.current = [];
     setRecError(null);
     setLiveTranscript("");
     setInterimTranscript("");
@@ -1230,6 +1458,7 @@ mediaStreamRef.current = stream;
 audioChunksRef.current = [];
 
 const mediaRecorder = new MediaRecorder(stream);
+console.log("RECORDER MIME:", mediaRecorder.mimeType);
 
 mediaRecorder.ondataavailable = (event) => {
   if (event.data.size > 0) {
@@ -1237,12 +1466,13 @@ mediaRecorder.ondataavailable = (event) => {
   }
 };
 
+
 mediaRecorder.onstop = async () => {
   console.log("ONSTOP DIPANGGIL");
 
+  setIsUploadingAudio(true);
 
- 
-    console.log(
+  console.log(
     "Chunks:",
     audioChunksRef.current.length
   );
@@ -1254,18 +1484,27 @@ mediaRecorder.onstop = async () => {
       0
     )
   );
+
   try {
-    const audioBlob = new Blob(audioChunksRef.current, {
-      type: "audio/webm",
-    });
+    const audioBlob = new Blob( audioChunksRef.current,
+  {
+    type: mediaRecorder.mimeType,
+  }
+);
+    console.log("BLOB SIZE =", audioBlob.size);
+    console.log("BLOB TYPE =", audioBlob.type);
+
+    const testUrl = URL.createObjectURL(audioBlob);
+    console.log("LOCAL TEST =", testUrl);
+
 
     const fileName = `audio_${Date.now()}.webm`;
 
     const { error } = await supabase.storage
       .from("SPEAKING-AUDIOS")
       .upload(fileName, audioBlob, {
-        contentType: "audio/webm",
-      });
+      contentType: mediaRecorder.mimeType,
+    });
 
     if (error) {
       console.error(error);
@@ -1278,20 +1517,24 @@ mediaRecorder.onstop = async () => {
 
     console.log("UPLOAD SUCCESS:", data.publicUrl);
 
-    setAudioUrl?.(data.publicUrl);
+  setAudioUrl?.((prev) => {
+    console.log("UPLOAD AUDIO:", prev, data.publicUrl);
+    return [...prev, data.publicUrl];
+  });
+
     console.log(
-  "SET AUDIO URL:",
-  data.publicUrl
-);
+      "SET AUDIO URL:",
+      data.publicUrl
+    );
   } catch (err) {
     console.error(err);
   } finally {
+    setIsUploadingAudio(false);
+
     mediaStreamRef.current
       ?.getTracks()
       .forEach((track) => track.stop());
   }
-    // setIsUploadingAudio(false);
-  
 };
 
 mediaRecorder.start(1000);
@@ -1324,7 +1567,11 @@ mediaRecorderRef.current = mediaRecorder;
       let accumulatedFinal = "";
       let interimResult = "";
 
-      for (let i = 0; i < event.results.length; ++i) {
+      for (
+          let i = event.resultIndex;
+          i < event.results.length;
+          ++i
+        ) {
         if (event.results[i].isFinal) {
           accumulatedFinal += event.results[i][0].transcript + " ";
         } else {
@@ -1340,6 +1587,10 @@ mediaRecorderRef.current = mediaRecorder;
       setInterimTranscript(interimResult);
 
       const idxForSave = questionIndexRef.current;
+      console.log(
+  "PART3 FINAL TEXT =",
+  totalFinalText.trim()
+);
       setTranscript(totalFinalText.trim());
 
       setQuestionTranscripts((prevArr) => {
@@ -1416,14 +1667,13 @@ const stopRecording = () => {
 
   const recorder = mediaRecorderRef.current;
 
-  if (recorder) {
-    try {
-      recorder.requestData();
-      recorder.stop();
-    } catch (e) {
-      console.error(e);
-    }
-  }
+  if (
+  recorder &&
+  recorder.state === "recording"
+) {
+  recorder.requestData();
+  recorder.stop();
+}
 
   if (recognitionRef.current) {
     stoppingIntentionalRef.current = true;
@@ -1496,10 +1746,11 @@ const stopRecording = () => {
   );
 }
 
-function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRecError, topic, bullets, isLoading }: SessionPagePart2Props) {
+function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscript, liveTranscript, setLiveTranscript, interimTranscript, setInterimTranscript, recError, setRecError, topic, bullets, isLoading,setAudioUrl }: SessionPagePart2Props) {
   const recognitionRef = useRef<any>(null);
  
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [isFlipped, setIsFlipped] = useState(false);
   
@@ -1524,6 +1775,64 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   const startRecording = async () => {
     setRecError(null);
     setTranscript(""); setLiveTranscript(""); setInterimTranscript("");
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+    audio: true,
+  });
+
+  mediaStreamRef.current = stream;
+  audioChunksRef.current = [];
+
+  const mediaRecorder = new MediaRecorder(stream);
+
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data.size > 0) {
+      audioChunksRef.current.push(event.data);
+    }
+  };
+
+  mediaRecorder.onstop = async () => {
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, {
+        type: "audio/webm",
+      });
+
+      const fileName = `audio_${Date.now()}.webm`;
+
+      const { error } = await supabase.storage
+        .from("SPEAKING-AUDIOS")
+        .upload(fileName, audioBlob, {
+          contentType: "audio/webm",
+        });
+
+      if (error) {
+        console.error(error);
+        return;
+      }
+
+      const { data } = supabase.storage
+        .from("SPEAKING-AUDIOS")
+        .getPublicUrl(fileName);
+
+      console.log("PART2 AUDIO:", data.publicUrl);
+
+      setAudioUrl?.((prev) => [
+        ...prev,
+        data.publicUrl,
+      ]);
+      console.log("PART2 URL MASUK:", data.publicUrl);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      mediaStreamRef.current
+        ?.getTracks()
+        .forEach((track) => track.stop());
+    }
+  };
+
+  mediaRecorder.start();
+
+  mediaRecorderRef.current = mediaRecorder;
    
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -1550,17 +1859,26 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
       setLiveTranscript(transcript + finalResult + interimResult);
     };
 
-    recognition.onend = () => {
-      setIsRecording(false);
-    };
+   recognition.onend = () => {
+  if (recognitionRef.current) {
+    try {
+      recognition.start();
+    } catch {}
+  }
+};
 
     recognition.start();
     setIsRecording(true);
   };
 
   const stopRecording = () => {
-    setIsRecording(false);
-    if (recognitionRef.current) {
+  setIsRecording(false);
+
+  if (mediaRecorderRef.current) {
+    mediaRecorderRef.current.stop();
+  }
+
+  if (recognitionRef.current) {
       try {
         recognitionRef.current.stop(); // Fix: Menggunakan stop() agar data kata-kata terakhir terproses penuh
       } catch (e) {
@@ -1724,19 +2042,27 @@ function SessionPagePart2({ isRecording, setIsRecording, transcript, setTranscri
   );
 }
 
-function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, assignmentId, audioUrl }: ResultPageProps) {
+
+
+function ResultPage({ transcript, topic, partLabel, unitIndex, partIndex, mode, assignmentId, audioUrl, testSessionId }: ResultPageProps) {
   const [evaluation, setEvaluation] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
 const [recError, setRecError] = useState(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  // const [testSessionId, setTestSessionId] = useState<string | null>(null);
   const [finalTestSummary, setFinalTestSummary] = useState<{
-    overall: number;
-    part1: number;
-    part2: number;
-    part3: number;
-  } | null>(null);
+  overall: number;
+  part1: number;
+  part2: number;
+  part3: number;
+
+  fluency: number;
+  lexical: number;
+  grammar: number;
+  pronunciation: number;
+} | null>(null);
   const [finalTestPartDetails, setFinalTestPartDetails] = useState<Array<{
     label: string;
     score: number;
@@ -1838,36 +2164,136 @@ const [recError, setRecError] = useState(null);
 
       try {
         console.log("📊 MEMBACA HISTORI NILAI PART SEBELUMNYA...");
-        const { data: historyRows, error: historyError } = await supabase
+        const { data: historyRows, error: historyError } =
+        await supabase
           .from("student_score_history")
-          .select("score, part_index, metrics")
+          .select("score, part_index, metrics, test_session_id")
           .eq("student_id", currentUserId)
           .eq("unit_index", unitIndex)
           .eq("attempt_type", "test")
-          .is("assignment_id", null)
-          .order("recorded_at", { ascending: false });
+          .eq("test_session_id", testSessionId)
+          .in("part_index", [1,2,3])
+          .order("recorded_at", { ascending: false })
+          .limit(3);
 
-        if (historyError) throw historyError;
+      if (historyError) throw historyError;
 
-        const latestPart3Score = Number(evaluation.overall);
-        const latestPartScores = new Map<number, number>([[3, latestPart3Score]]);
-        
-        (historyRows || []).forEach((row) => {
-          const rowPartIndex = row.part_index;
-          if ((rowPartIndex === 1 || rowPartIndex === 2) && !latestPartScores.has(rowPartIndex)) {
-            latestPartScores.set(rowPartIndex, Number(row.score));
-          }
-        });
+console.log("=== HISTORY ROWS ===");
+historyRows?.forEach((row) => {
+  console.log(
+    "PART:",
+    row.part_index,
+    "SCORE:",
+    row.score
+  );
+});
+console.log("CURRENT TEST SESSION =", testSessionId);
+console.log("ROW COUNT =", historyRows?.length);
+console.log(
+  historyRows?.map((r) => ({
+    score: r.score,
+    part: r.part_index,
+    session: r.test_session_id,
+  }))
+);
 
-        finalPart1 = latestPartScores.get(1) ?? 0;
-        finalPart2 = latestPartScores.get(2) ?? 0;
-        finalPart3 = latestPartScores.get(3) ?? 0;
+const partRows = (historyRows ?? []).filter(
+  (row) => row.part_index !== null
+);
+
+const part1Row = partRows.find(
+  (r) => r.part_index === 1
+);
+
+const part2Row = partRows.find(
+  (r) => r.part_index === 2
+);
+
+const part3Row = partRows.find(
+  (r) => r.part_index === 3
+);
+
+finalPart1 = Number(part1Row?.score ?? 0);
+finalPart2 = Number(part2Row?.score ?? 0);
+finalPart3 = Number(part3Row?.score ?? evaluation.overall);
+
+console.log("P1 ROW =", part1Row);
+console.log("P2 ROW =", part2Row);
+console.log("P3 ROW =", part3Row);
         
         const validScores = [finalPart1, finalPart2, finalPart3].filter((s) => s > 0);
         finalOverall = validScores.length > 0 ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 0;
+         console.log("FINAL P1 =", finalPart1);
+        console.log("FINAL P2 =", finalPart2);
+        console.log("FINAL P3 =", finalPart3);
+        console.log("FINAL OVERALL =", finalOverall);
+
+        const fluencyScores: number[] = [];
+const lexicalScores: number[] = [];
+const grammarScores: number[] = [];
+const pronunciationScores: number[] = [];
+
+partRows.forEach((row) => {
+  const metrics = Array.isArray(row.metrics)
+    ? row.metrics
+    : [];
+
+  metrics.forEach((m: any) => {
+    const score = Number(m.score ?? 0);
+
+    if (m.id === "fluency")
+      fluencyScores.push(score);
+
+    if (
+      m.id === "vocabulary" ||
+      m.id === "lexical"
+    )
+      lexicalScores.push(score);
+
+    if (m.id === "grammar")
+      grammarScores.push(score);
+
+    if (m.id === "pronunciation")
+      pronunciationScores.push(score);
+  });
+});
+const avgFluency =
+  fluencyScores.length
+    ? fluencyScores.reduce((a,b)=>a+b,0) /
+      fluencyScores.length
+    : 0;
+
+const avgLexical =
+  lexicalScores.length
+    ? lexicalScores.reduce((a,b)=>a+b,0) /
+      lexicalScores.length
+    : 0;
+
+const avgGrammar =
+  grammarScores.length
+    ? grammarScores.reduce((a,b)=>a+b,0) /
+      grammarScores.length
+    : 0;
+
+const avgPronunciation =
+  pronunciationScores.length
+    ? pronunciationScores.reduce((a,b)=>a+b,0) /
+      pronunciationScores.length
+    : 0;
+
 
         if (!cancelled) {
-          setFinalTestSummary({ overall: finalOverall, part1: finalPart1, part2: finalPart2, part3: finalPart3 });
+          setFinalTestSummary({
+  overall: finalOverall,
+  part1: finalPart1,
+  part2: finalPart2,
+  part3: finalPart3,
+
+  fluency: avgFluency,
+  lexical: avgLexical,
+  grammar: avgGrammar,
+  pronunciation: avgPronunciation,
+});
         }
 
         const currentPart3Metrics = Array.isArray(evaluation?.metrics) ? evaluation.metrics : [];
@@ -1901,6 +2327,7 @@ const [recError, setRecError] = useState(null);
           recorded_by: currentUserId,
           attempt_type: "test",
           assignment_id: assignmentId ?? null,
+           test_session_id: testSessionId ?? null,
         });
 
         if (insertError) throw insertError;
@@ -1918,23 +2345,59 @@ const [recError, setRecError] = useState(null);
       }
     };
 
-    const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
-    if (isFinalTestResult) {
-      void loadTestSummary();
-    }
+    const isFinalTestResult =
+    mode === "test" &&
+    partIndex === 0;
+
+if (isFinalTestResult) {
+  void loadTestSummary();
+  
+  console.log("PART INDEX =", partIndex);
+  
+console.log("IS FINAL =", isFinalTestResult);
+}
 
     return () => {
       cancelled = true;
     };
-  }, [analysisLoading, evaluation, mode, partIndex, transcript, unitIndex, finalTestSummary]);
+  }, [
+  analysisLoading,
+  evaluation,
+  mode,
+  partIndex,
+  transcript,
+  unitIndex,
+  testSessionId,
+  assignmentId,
+]);
 
   useEffect(() => {
-    const persistResult = async () => {
-      if (analysisLoading || !evaluation || !transcript.trim() || hasSavedRef.current) {
-        return;
-      }
+   const persistResult = async () => {
 
-      const latestScore = Number(evaluation.overall);
+    
+    console.log("PROP AUDIO URL =", audioUrl);
+    console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
+
+  if (partIndex === 0) {
+    console.log("SKIP FINAL RESULT SAVE");
+    return;
+  }
+
+  if (
+    analysisLoading ||
+    !evaluation ||
+    !transcript.trim() ||
+    hasSavedRef.current
+  ) {
+    return;
+  }
+console.log("EVALUATION OVERALL =", evaluation?.overall);
+console.log("FINAL SUMMARY =", finalTestSummary?.overall);
+console.log("PART INDEX =", partIndex);
+      const latestScore =
+  partIndex === 0 && finalTestSummary
+    ? finalTestSummary.overall
+    : Number(evaluation.overall);
       if (!Number.isFinite(latestScore)) {
         setSaveStatus("error");
         setSaveError("Skor hasil belum siap untuk disimpan.");
@@ -1970,8 +2433,14 @@ const [recError, setRecError] = useState(null);
         hasSavedRef.current = false;
         return;
       }
-console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
+     
       // Fix: Jika mode adalah "learn", data disimpan otomatis di block ini.
+            console.log("===== SAVE PAYLOAD =====");
+      console.log("PART =", partIndex);
+      console.log("TRANSCRIPT LENGTH =", transcript.length);
+      console.log("TRANSCRIPT =", transcript);
+      console.log("SCORE =", latestScore);
+      console.log("========================");
       const response = await fetch("/api/student-practice-progress", {
         method: "POST",
         headers: {
@@ -1991,6 +2460,8 @@ console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
           attempt_type: mode === "test" ? "test" : "practice",
           assignment_id: assignmentId ?? null,
           audio_url: audioUrl || null,
+          test_session_id: testSessionId ?? null,
+          
         }),
       });
 
@@ -2012,8 +2483,18 @@ console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
       setSaveStatus("saved");
     };
 
+    console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
+
     void persistResult();
-  }, [analysisLoading, evaluation, partIndex, transcript, unitIndex, mode, assignmentId, audioUrl]);
+  }, [analysisLoading, evaluation, partIndex, transcript, unitIndex, mode, assignmentId, audioUrl,   testSessionId]);
+  if (evaluation) {
+  console.log("==========");
+  console.log("PART =", partIndex);
+  console.log("TRANSCRIPT =", transcript);
+  console.log("EVALUATION =", evaluation);
+  console.log("OVERALL =", evaluation.overall);
+  console.log("==========");
+}
 
   const scoreData: EvaluationResult = evaluation ?? {
     overall: "-",
@@ -2023,23 +2504,81 @@ console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
     analysis: "AI analysis will appear after the transcript is processed.",
   };
 
-  const isFinalTestResult = Boolean(finalTestSummary && mode === "test" && partIndex === 3);
-  let testScoreData: EvaluationResult | null = null;
-  if (isFinalTestResult && finalTestSummary) {
-    testScoreData = {
-      overall: evaluation?.overallScore || finalTestSummary.overall.toFixed(1),
-      level: evaluation?.level || `Final Test Band ${finalTestSummary.overall.toFixed(1)}`,
-      metrics: [
-        { id: "part1", label: "Part 1", score: finalTestSummary.part1.toFixed(1), text: "Included in the final average." },
-        { id: "part2", label: "Part 2", score: finalTestSummary.part2.toFixed(1), text: "Included in the final average." },
-        { id: "part3", label: "Part 3", score: finalTestSummary.part3.toFixed(1), text: "Included in the final average." },
-      ],
-      recommendation: evaluation?.recommendation || "Ulangi test untuk membandingkan skor akhir terbaru.",
-      analysis: evaluation?.analysis || "Gagal memuat analisis AI.",
-    };
-  }
+  
+  
+const isFinalTestResult =
+  mode === "test" &&
+  partIndex === 0;
+
+console.log("PART INDEX =", partIndex);
+console.log("MODE =", mode);
+console.log("FINAL SUMMARY =", finalTestSummary);
+console.log("IS FINAL =", isFinalTestResult);
+
+
+let testScoreData: EvaluationResult | null = null;
+
+if (isFinalTestResult && finalTestSummary) {
+  testScoreData = {
+    overall: finalTestSummary.overall.toFixed(1),
+
+    level: `Final Test Band ${finalTestSummary.overall.toFixed(1)}`,
+
+   
+    metrics: [
+  {
+    id: "fluency",
+    label: "Fluency & Coherence",
+    score: finalTestSummary.fluency.toFixed(1),
+    text: "Average across all parts",
+  },
+  {
+    id: "vocabulary",
+    label: "Lexical Resource",
+    score: finalTestSummary.lexical.toFixed(1),
+    text: "Average across all parts",
+  },
+  {
+    id: "grammar",
+    label: "Grammar Range & Accuracy",
+    score: finalTestSummary.grammar.toFixed(1),
+    text: "Average across all parts",
+  },
+  {
+    id: "pronunciation",
+    label: "Pronunciation",
+    score: finalTestSummary.pronunciation.toFixed(1),
+    text: "Average across all parts",
+  },
+],
+
+    recommendation:
+  evaluation?.recommendation ??
+  "Review each part to improve your score.",
+
+analysis: `
+The candidate achieved an overall band score of ${finalTestSummary.overall.toFixed(1)}.
+
+Part 1 score was ${finalTestSummary.part1.toFixed(1)},
+Part 2 score was ${finalTestSummary.part2.toFixed(1)},
+and Part 3 score was ${finalTestSummary.part3.toFixed(1)}.
+
+The strongest performance appeared in the later sections of the test, showing improved ability to develop ideas and communicate responses.
+To achieve a higher band score, focus on expanding answers, increasing vocabulary variety, improving grammatical accuracy, and maintaining clear pronunciation throughout all parts of the speaking test.
+`,
+  };
+}
+  
+  console.log("FINAL TEST SUMMARY =", finalTestSummary);
+console.log("PART INDEX =", partIndex);
+
+
   const displayScoreData = testScoreData ?? scoreData;
-  const testPartBreakdown = mode === "test" && partIndex === 3 && finalTestSummary && finalTestPartDetails
+  const testPartBreakdown =
+  mode === "test" &&
+  partIndex === 0 &&
+  finalTestSummary &&
+  finalTestPartDetails
     ? finalTestPartDetails.map((part) => ({
         label: part.label,
         score: part.score.toFixed(1),
@@ -2048,6 +2587,11 @@ console.log("AUDIO URL YANG MAU DISIMPAN:", audioUrl);
         components: part.components,
       }))
     : undefined;
+    console.log("ANALYSIS CARD DATA", {
+  overall: displayScoreData?.overall,
+  level: displayScoreData?.level,
+  metrics: displayScoreData?.metrics,
+});
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px", width: "100%", paddingBottom: "20px" }}>
@@ -2190,4 +2734,4 @@ const css = `
     50% { transform: scale(1.1); opacity: 0.9; }
     100% { transform: scale(0.9); opacity: 0.6; }
   }
-`;
+`

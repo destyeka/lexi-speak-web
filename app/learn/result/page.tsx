@@ -215,7 +215,19 @@ if (historyError) {
       notes: activeRow.notes, // 🌟 Amankan kolom notes langsung dari raw table row
       metrics: parseJsonField(activeRow.metrics),
       analysis: parseJsonField(activeRow.analysis),
-      audio_url: activeRow.audio_url,
+      audio_url: (() => {
+  try {
+    const parsed = JSON.parse(
+      activeRow.audio_url ?? "[]"
+    );
+
+    return Array.isArray(parsed)
+      ? parsed
+      : [parsed];
+  } catch {
+    return [];
+  }
+})(),
     };
   }, [partsData, activePart]);
 
@@ -281,6 +293,12 @@ const partMetricsDetail = useMemo(() => {
       part3: partsData.part3?.score ?? null,
     };
   }, [partsData]);
+  console.log("ACTIVE PAYLOAD =", activePartPayload);
+console.log("AUDIO URL =", activePartPayload?.audio_url);
+console.log(
+  "IS ARRAY =",
+  Array.isArray(activePartPayload?.audio_url)
+);
 
 return (
     <main className="min-h-screen bg-gradient-to-br from-red-50 via-white to-orange-50 px-4 py-8 font-plus-jakarta-sans antialiased dark:from-gray-950 dark:via-gray-950 dark:to-gray-900">
@@ -384,11 +402,26 @@ return (
                         Audio Recording
                       </p>
 
-                      <audio
-                        controls
-                        src={activePartPayload.audio_url}
-                        className="w-full mt-3"
-                      />
+                      {Array.isArray(activePartPayload.audio_url) &&
+  activePartPayload.audio_url.map(
+    (url, index) => (
+      <div
+        key={index}
+        className="mt-3"
+      >
+        <p className="text-xs mb-1 font-semibold">
+          Question {index + 1}
+        </p>
+
+        <audio
+          controls
+          src={url}
+          className="w-full"
+        />
+      </div>
+    )
+)}
+                      
 
                       <p className="mt-2 text-[11px] text-gray-500">
                         Listen to your recorded speaking response.
