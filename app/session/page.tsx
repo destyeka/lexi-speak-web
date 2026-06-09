@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AIChatBubble } from "@/components/ui/system/AIChatBubble";
 import { AlertCard } from "@/components/ui/system/AlertCard";
@@ -19,7 +19,7 @@ type SessionPageProps = {
 
 type SessionState = "intro" | "speaking" | "complete";
 
-export default function SessionPage({ params }: SessionPageProps) {
+function SessionPageContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [state, setState] = useState<SessionState>("intro");
@@ -142,4 +142,12 @@ export default function SessionPage({ params }: SessionPageProps) {
             </div>
         </div>
     );
+}
+
+export default function SessionPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <SessionPageContent />
+    </Suspense>
+  );
 }
