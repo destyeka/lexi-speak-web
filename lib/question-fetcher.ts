@@ -25,6 +25,8 @@ export type Topic = {
 export interface AssignmentQuestion {
   id: string;
   assignment_id?: string;
+  topic_id?: string | null;
+  part?: number | null;
   type?: "question" | "bullet" | string;
   content: string;
   prompt?: string | null;
