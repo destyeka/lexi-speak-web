@@ -16,6 +16,8 @@ type ProfileRow = {
   created_at: string | null;
   affiliation: string | null;
   avatar_url?: string | null;
+  certificate_name?: string | null;
+  last_cert_name_update?: string | null;
 };
 
 type EditableProfile = {
@@ -87,6 +89,9 @@ export default function ProfilePage() {
     bio: "-",
     affiliation: "-",
   });
+  const [certificateName, setCertificateName] = useState<string>("");
+  const [certificateNote, setCertificateNote] = useState<string>("");
+  const [lastCertificateNameUpdate, setLastCertificateNameUpdate] = useState<string | null>(null);
   const [editableAddress, setEditableAddress] = useState<EditableAddress>({
     country: "-",
     cityState: "-",
@@ -157,12 +162,17 @@ export default function ProfilePage() {
 
       const { data } = await supabase
         .from("profiles")
-        .select("email, role, created_at, affiliation, avatar_url")
+        .select("email, role, created_at, affiliation, avatar_url, certificate_name, last_cert_name_update")
         .eq("id", user.id)
         .maybeSingle();
 
       const profileData = (data as ProfileRow | null) ?? null;
       setProfile(profileData);
+      setCertificateName(profileData?.certificate_name || "");
+      setLastCertificateNameUpdate(profileData?.last_cert_name_update || null);
+      if (profileData?.certificate_name) {
+        setCertificateNote("Certificate name can be edited once per day.");
+      }
 
       setProfileStore({
         id: user.id,
@@ -185,10 +195,25 @@ export default function ProfilePage() {
     void load();
   }, [router, setProfileStore]);
 
-  const handleSaveUserInfo = async (values: EditableProfile) => {
+  const handleSaveUserInfo = async (values: EditableProfile & { certificateName: string }) => {
     const trimmedFirstName = values.firstName.trim();
     const trimmedLastName = values.lastName.trim();
+    const trimmedCertificateName = values.certificateName.trim();
     const fullName = [trimmedFirstName, trimmedLastName].filter(Boolean).join(" ").trim();
+
+    if (trimmedCertificateName !== certificateName) {
+      // Enforce once per calendar day (server local day) on the client side as well.
+      const lastUpdateDate = lastCertificateNameUpdate ? new Date(lastCertificateNameUpdate) : null;
+      const now = new Date();
+      if (
+        lastUpdateDate &&
+        lastUpdateDate.getFullYear() === now.getFullYear() &&
+        lastUpdateDate.getMonth() === now.getMonth() &&
+        lastUpdateDate.getDate() === now.getDate()
+      ) {
+        throw new Error("Certificate name can only be changed once per day.");
+      }
+    }
 
     const { error } = await supabase.auth.updateUser({
       data: {
@@ -207,9 +232,14 @@ export default function ProfilePage() {
     }
 
     // Update affiliation in profiles table
+    const shouldUpdateCertificateTime = trimmedCertificateName !== certificateName;
     const { error: profileError } = await supabase
       .from("profiles")
-      .update({ affiliation: values.affiliation.trim() || null })
+      .update({
+        affiliation: values.affiliation.trim() || null,
+        certificate_name: trimmedCertificateName || null,
+        last_cert_name_update: shouldUpdateCertificateTime ? new Date().toISOString() : lastCertificateNameUpdate,
+      })
       .eq("id", (await supabase.auth.getUser()).data.user?.id);
 
     if (profileError) {
@@ -225,6 +255,12 @@ export default function ProfilePage() {
       bio: values.bio.trim() || "-",
       affiliation: values.affiliation.trim() || "-",
     });
+    setCertificateName(trimmedCertificateName);
+    if (trimmedCertificateName !== certificateName) {
+      setLastCertificateNameUpdate(new Date().toISOString());
+      setCertificateNote("Certificate name can be edited once per day.");
+    }
+
     // update shared profile store (display name) so header updates
     try {
       useProfileStore.getState().setProfile({ fullName });
@@ -289,6 +325,8 @@ export default function ProfilePage() {
           phone={editableProfile.phone}
           bio={editableProfile.bio}
           affiliation={editableProfile.affiliation}
+          certificateName={certificateName || "-"}
+        certificateNote={certificateNote}
           onSave={handleSaveUserInfo}
         />
         <UserAddressCard

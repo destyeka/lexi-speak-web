@@ -7,6 +7,8 @@ create table if not exists public.profiles (
   role text not null default 'user' check (role in ('user', 'guru', 'admin')),
   affiliation text, -- [NEW] Atribut afiliasi user
   coach_id uuid references public.profiles(id) on delete set null,
+  certificate_name text,
+  last_cert_name_update timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -16,6 +18,12 @@ alter table public.profiles
 
 alter table public.profiles
   add column if not exists coach_id uuid references public.profiles(id) on delete set null;
+
+alter table public.profiles
+  add column if not exists certificate_name text;
+
+alter table public.profiles
+  add column if not exists last_cert_name_update timestamptz;
 
 -- 1b) Classes & Class Members tables [NEW]
 create table if not exists public.classes (
@@ -1480,6 +1488,63 @@ alter table public.assignment_submissions
   add column if not exists analysis jsonb not null default '{}'::jsonb;
 
 create index if not exists assignment_submissions_score_idx on public.assignment_submissions(score);
+
+create table if not exists public.certificates (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.profiles(id) on delete cascade,
+  assignment_id uuid not null references public.assignments(id) on delete cascade,
+  score numeric not null,
+  name_on_certificate text not null,
+  certificate_name text,
+  speaking_band text not null,
+  issued_at timestamptz not null default now(),
+  storage_bucket text not null default 'certificates',
+  file_path text not null,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists certificates_student_assignment_idx on public.certificates(student_id, assignment_id);
+create index if not exists certificates_student_idx on public.certificates(student_id);
+create index if not exists certificates_assignment_idx on public.certificates(assignment_id);
+create index if not exists certificates_issued_at_idx on public.certificates(issued_at desc);
+
+-- RLS for certificates
+alter table public.certificates enable row level security;
+
+drop policy if exists "certificates_select" on public.certificates;
+drop policy if exists "certificates_insert" on public.certificates;
+drop policy if exists "certificates_update" on public.certificates;
+drop policy if exists "certificates_delete" on public.certificates;
+
+create policy "certificates_select"
+on public.certificates for select
+to authenticated
+using (
+  student_id = auth.uid()
+  or exists (
+    select 1 from public.assignments a
+    where a.id = certificates.assignment_id
+      and a.coach_id = auth.uid()
+  )
+);
+
+create policy "certificates_insert"
+on public.certificates for insert
+to authenticated
+with check (
+  student_id = auth.uid()
+);
+
+create policy "certificates_update"
+on public.certificates for update
+to authenticated
+using (student_id = auth.uid())
+with check (student_id = auth.uid());
+
+create policy "certificates_delete"
+on public.certificates for delete
+to authenticated
+using (student_id = auth.uid());
 
 -- RLS for assignments
 alter table public.assignments enable row level security;
