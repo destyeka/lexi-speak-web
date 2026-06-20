@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { getAllModels, type AIModel } from "@/lib/models";
 
 type AppRole = "user" | "guru" | "admin";
 
@@ -14,6 +13,81 @@ type ProfileRow = {
   coach_id: string | null;
   created_at: string | null;
 };
+
+type LlmSettingRow = {
+  id: string;
+  setting_name: string | null;
+  provider_name: string;
+  base_url: string;
+  model_name: string;
+  api_key?: string;
+  is_active: boolean;
+  created_at: string | null;
+};
+
+type ProviderOption = {
+  id: string;
+  name: string;
+  badge: "FREE" | "FREE MODELS";
+  baseUrl: string;
+  models: {
+    label: string;
+    value: string;
+    description?: string;
+  }[];
+};
+
+const LLM_PROVIDERS: ProviderOption[] = [
+  {
+    id: "groq",
+    name: "Groq",
+    badge: "FREE",
+    baseUrl: "https://api.groq.com/openai/v1/chat/completions",
+    models: [
+      {
+        label: "Llama 3.1 8B Instant",
+        value: "llama-3.1-8b-instant",
+        description: "Fast free-tier option. Good for quick feedback.",
+      },
+      {
+        label: "Llama 3.3 70B Versatile",
+        value: "llama-3.3-70b-versatile",
+        description: "Stronger feedback quality, but may hit free rate limits faster.",
+      },
+    ],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    badge: "FREE MODELS",
+    baseUrl: "https://openrouter.ai/api/v1/chat/completions",
+    models: [
+      {
+        label: "OpenRouter Free Router",
+        value: "openrouter/free",
+        description: "Automatically routes to available free models.",
+      },
+    ],
+  },
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    badge: "FREE",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    models: [
+      {
+        label: "Gemini Flash",
+        value: "gemini-2.5-flash",
+        description: "Free-tier Gemini option, rate-limited.",
+      },
+      {
+        label: "Gemini Flash Lite",
+        value: "gemini-2.5-flash-lite",
+        description: "Lighter and usually better for low-cost/free usage.",
+      },
+    ],
+  },
+];
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -27,8 +101,21 @@ export default function AdminDashboardPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [pageSize, setPageSize] = useState<5 | 10>(10);
   const [currentPage, setCurrentPage] = useState(1);
-  const [models, setModels] = useState<AIModel[]>([]);
-  const [loadingModels, setLoadingModels] = useState(true);
+
+  const [llmSettings, setLlmSettings] = useState<LlmSettingRow[]>([]);
+  const [loadingLlmSettings, setLoadingLlmSettings] = useState(true);
+  const [savingLlmSetting, setSavingLlmSetting] = useState(false);
+  const [editingLlmId, setEditingLlmId] = useState<string | null>(null);
+  const [isLlmFormOpen, setIsLlmFormOpen] = useState(false);
+
+  const [selectedProviderId, setSelectedProviderId] = useState("groq");
+  const [selectedModelName, setSelectedModelName] = useState(
+    LLM_PROVIDERS[0].models[0].value
+  );
+  const [apiKey, setApiKey] = useState("");
+  const [setAsActive, setSetAsActive] = useState(true);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [settingName, setSettingName] = useState("");
 
   const counters = useMemo(() => {
     const total = profiles.length;
@@ -46,6 +133,28 @@ export default function AdminDashboardPage() {
 
     return { total, students, gurus, admins, newStudents7d };
   }, [profiles]);
+
+  const selectedProvider = useMemo(
+    () =>
+      LLM_PROVIDERS.find((provider) => provider.id === selectedProviderId) ??
+      LLM_PROVIDERS[0],
+    [selectedProviderId]
+  );
+
+  const selectedModel = useMemo(
+    () =>
+      selectedProvider.models.find((model) => model.value === selectedModelName) ??
+      selectedProvider.models[0],
+    [selectedProvider, selectedModelName]
+  );
+
+  const handleProviderChange = (providerId: string) => {
+    const provider =
+      LLM_PROVIDERS.find((item) => item.id === providerId) ?? LLM_PROVIDERS[0];
+
+    setSelectedProviderId(provider.id);
+    setSelectedModelName(provider.models[0].value);
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -66,8 +175,8 @@ export default function AdminDashboardPage() {
 
       const metadataRole =
         user.user_metadata?.role === "admin" ||
-        user.user_metadata?.role === "guru" ||
-        user.user_metadata?.role === "user"
+          user.user_metadata?.role === "guru" ||
+          user.user_metadata?.role === "user"
           ? (user.user_metadata.role as AppRole)
           : "user";
 
@@ -124,16 +233,20 @@ export default function AdminDashboardPage() {
 
       setProfiles((data as ProfileRow[] | null) ?? []);
 
-      // Load models
-      try {
-        const loadedModels = await getAllModels();
-        setModels(loadedModels);
-      } catch (err) {
-        console.error("Failed to load models:", err);
+      const { data: llmData, error: llmError } = await supabase
+        .from("llm_settings")
+        .select("id, setting_name, provider_name, base_url, model_name, api_key, is_active, created_at")
+        .order("created_at", { ascending: false });
+
+      if (llmError) {
+        console.error("Failed to load LLM settings:", llmError);
+        setNotice(llmError.message);
       }
 
+      setLlmSettings((llmData as LlmSettingRow[] | null) ?? []);
+
       setLoading(false);
-      setLoadingModels(false);
+      setLoadingLlmSettings(false);
     };
 
     void load();
@@ -169,27 +282,214 @@ export default function AdminDashboardPage() {
     [profiles]
   );
 
-  const handleModelChange = (modelId: string) => {
-    // Update the models.json by creating a new array with the selected model as active
-    const updatedModels = models.map((m) => ({
-      ...m,
-      active: m.id === modelId,
-    }));
-    setModels(updatedModels);
-
-    // Write the updated models back to models.json
-    const modelsData = { models: updatedModels };
-    fetch("/api/update-models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(modelsData),
-    }).catch((err) => {
-      console.error("Failed to save model selection:", err);
-      setNotice("Failed to save model selection");
-    });
+  const resetLlmForm = () => {
+    setEditingLlmId(null);
+    setSelectedProviderId("groq");
+    setSelectedModelName(LLM_PROVIDERS[0].models[0].value);
+    setSettingName("");
+    setApiKey("");
+    setShowApiKey(false);
+    setSetAsActive(true);
+    setIsLlmFormOpen(false);
   };
 
-  const activeModel = useMemo(() => models.find((m) => m.active), [models]);
+  const handleAddLlmSetting = () => {
+    setEditingLlmId(null);
+    setSelectedProviderId("groq");
+    setSelectedModelName(LLM_PROVIDERS[0].models[0].value);
+    setSettingName("");
+    setApiKey("");
+    setShowApiKey(false);
+    setSetAsActive(true);
+    setIsLlmFormOpen(true);
+  };
+
+  const handleSaveLlmSetting = async () => {
+    setNotice("");
+
+    if (!selectedProvider || !selectedModelName.trim()) {
+      setNotice("Please choose provider and model.");
+      return;
+    }
+
+    if (!editingLlmId && !apiKey.trim()) {
+      setNotice("Please fill the API key.");
+      return;
+    }
+
+    setSavingLlmSetting(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setNotice("Please login again.");
+      setSavingLlmSetting(false);
+      return;
+    }
+
+    if (setAsActive) {
+      const { error: deactivateError } = await supabase
+        .from("llm_settings")
+        .update({ is_active: false })
+        .eq("is_active", true);
+
+      if (deactivateError) {
+        setNotice(deactivateError.message);
+        setSavingLlmSetting(false);
+        return;
+      }
+    }
+
+    const payload: Record<string, unknown> = {
+      setting_name:
+        settingName.trim() ||
+        `${selectedProvider.name} - ${selectedModelName}`,
+      provider_name: selectedProvider.name,
+      base_url: selectedProvider.baseUrl,
+      model_name: selectedModelName,
+      is_active: setAsActive,
+    };
+
+    if (apiKey.trim()) {
+      payload.api_key = apiKey.trim();
+    }
+
+    let error;
+
+    if (editingLlmId) {
+      const result = await supabase
+        .from("llm_settings")
+        .update(payload)
+        .eq("id", editingLlmId);
+
+      error = result.error;
+    } else {
+      const result = await supabase.from("llm_settings").insert({
+        ...payload,
+        api_key: apiKey.trim(),
+        created_by: user.id,
+      });
+
+      error = result.error;
+    }
+
+    if (error) {
+      setNotice(error.message);
+      setSavingLlmSetting(false);
+      return;
+    }
+
+    const { data: refreshed, error: refreshError } = await supabase
+      .from("llm_settings")
+      .select("id, setting_name, provider_name, base_url, model_name, api_key, is_active, created_at")
+      .order("created_at", { ascending: false });
+
+    if (refreshError) {
+      setNotice(refreshError.message);
+    } else {
+      setLlmSettings((refreshed as LlmSettingRow[] | null) ?? []);
+    }
+
+    resetLlmForm();
+    setSavingLlmSetting(false);
+    setNotice(editingLlmId ? "LLM setting updated successfully." : "LLM setting saved successfully.");
+  };
+
+  const handleActivateLlmSetting = async (id: string) => {
+    setNotice("");
+    setSavingLlmSetting(true);
+
+    const { error: deactivateError } = await supabase
+      .from("llm_settings")
+      .update({ is_active: false })
+      .eq("is_active", true);
+
+    if (deactivateError) {
+      setNotice(deactivateError.message);
+      setSavingLlmSetting(false);
+      return;
+    }
+
+    const { error } = await supabase
+      .from("llm_settings")
+      .update({ is_active: true })
+      .eq("id", id);
+
+    if (error) {
+      setNotice(error.message);
+      setSavingLlmSetting(false);
+      return;
+    }
+
+    setLlmSettings((prev) =>
+      prev.map((setting) => ({
+        ...setting,
+        is_active: setting.id === id,
+      }))
+    );
+
+    setSavingLlmSetting(false);
+    setNotice("Active LLM setting updated.");
+  };
+
+  const handleEditLlmSetting = (setting: LlmSettingRow) => {
+    const matchedProvider =
+      LLM_PROVIDERS.find((provider) => provider.baseUrl === setting.base_url) ??
+      LLM_PROVIDERS[0];
+
+    setEditingLlmId(setting.id);
+    setSelectedProviderId(matchedProvider.id);
+
+    const matchedModel =
+      matchedProvider.models.find((model) => model.value === setting.model_name) ??
+      matchedProvider.models[0];
+
+    setSelectedModelName(matchedModel.value);
+    setSettingName(setting.setting_name ?? "");
+    setApiKey(setting.api_key ?? "");
+    setShowApiKey(false);
+    setSetAsActive(setting.is_active);
+    setIsLlmFormOpen(true);
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleDeleteLlmSetting = async (id: string) => {
+    const target = llmSettings.find((setting) => setting.id === id);
+
+    const confirmed = window.confirm(
+      target?.is_active
+        ? "This is the active LLM setting. Deleting it may stop AI evaluation until another provider is activated. Continue?"
+        : "Delete this LLM setting? This cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    setNotice("");
+    setSavingLlmSetting(true);
+
+    const { error } = await supabase
+      .from("llm_settings")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      setNotice(error.message);
+      setSavingLlmSetting(false);
+      return;
+    }
+
+    setLlmSettings((prev) => prev.filter((setting) => setting.id !== id));
+
+    if (editingLlmId === id) {
+      resetLlmForm();
+    }
+
+    setSavingLlmSetting(false);
+    setNotice("LLM setting deleted.");
+  };
 
   const handleCoachAssign = async (studentId: string, coachId: string | null) => {
     setAssigningStudentId(studentId);
@@ -242,50 +542,285 @@ export default function AdminDashboardPage() {
         {notice ? <p className="mt-3 text-sm text-error-600">{notice}</p> : null}
       </div>
 
-      {/* model settings */}
+      {/* LLM settings */}
       <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-white/[0.03]">
-        <h1 className="text-xl font-semibold text-gray-800 dark:text-white/90">Practice Session Model</h1>
-        <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-          Select a model that will be used for practice sessions. This setting applies to all students and coaches, and can be changed anytime.
-        </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-800 dark:text-white/90">
+              LLM API Settings
+            </h1>
 
-        {loadingModels ? (
-          <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading models...</p>
-        ) : models.length === 0 ? (
-          <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">No models available. Please check your models.json file.</p>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {models.map((model) => (
-              <button
-                key={model.id}
-                onClick={() => handleModelChange(model.id)}
-                className={`w-full rounded-lg border-2 p-4 text-left transition ${
-                  model.active
-                    ? "border-brand-500 bg-brand-50 dark:border-brand-500 dark:bg-brand-500/10"
-                    : "border-gray-300 bg-white hover:border-gray-400 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-800 dark:text-white/90">{model.name}</p>
-                    <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                      Model: <span className="font-mono">{model.modelName}</span> • Endpoint:{" "}
-                      <span className="font-mono">{model.endpoint}</span>
-                    </p>
-                    {model.description && (
-                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{model.description}</p>
-                    )}
-                  </div>
-                  {model.active && (
-                    <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 dark:bg-green-500/20 dark:text-green-400">
-                      Active
-                    </span>
-                  )}
-                </div>
-              </button>
-            ))}
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+              Manage the AI provider used for speaking evaluation. Only the active provider will be used.
+            </p>
           </div>
-        )}
+
+          <button
+            type="button"
+            onClick={handleAddLlmSetting}
+            disabled={savingLlmSetting}
+            className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            + Add LLM
+          </button>
+        </div>
+
+        {isLlmFormOpen ? (
+          <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/40">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800 dark:text-white/90">
+                  {editingLlmId ? "Edit LLM Provider" : "Add New LLM Provider"}
+                </h2>
+
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {editingLlmId
+                    ? "Update provider, model, name, or API key. Use Show/Hide if you need to check the saved key."
+                    : "Choose a provider, select a model, name this setting, and paste its API key."}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={resetLlmForm}
+                disabled={savingLlmSetting}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
+              >
+                Close
+              </button>
+            </div>
+
+            {editingLlmId ? (
+              <p className="mb-4 rounded-lg bg-yellow-50 px-3 py-2 text-sm font-medium text-yellow-700 dark:bg-yellow-500/10 dark:text-yellow-300">
+                Editing existing LLM setting. The saved API key is loaded in the field below.
+              </p>
+            ) : null}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Setting Name
+                </label>
+
+                <input
+                  value={settingName}
+                  onChange={(event) => setSettingName(event.target.value)}
+                  placeholder="Example: Groq Main Key, Gemini Backup, OpenRouter Test"
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                />
+
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Use this to distinguish settings with the same provider/model but different API keys.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Provider
+                </label>
+
+                <select
+                  value={selectedProviderId}
+                  onChange={(event) => handleProviderChange(event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                >
+                  {LLM_PROVIDERS.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} ({provider.badge})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Model
+                </label>
+
+                <select
+                  value={selectedModelName}
+                  onChange={(event) => setSelectedModelName(event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                >
+                  {selectedProvider.models.map((model) => (
+                    <option key={model.value} value={model.value}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+
+                {selectedModel?.description ? (
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {selectedModel.description}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="rounded-lg bg-white p-3 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-400 md:col-span-2">
+                <p>
+                  Endpoint:{" "}
+                  <span className="font-mono">{selectedProvider.baseUrl}</span>
+                </p>
+                <p className="mt-1">
+                  Model ID:{" "}
+                  <span className="font-mono">{selectedModelName}</span>
+                </p>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  API Key
+                </label>
+
+                <div className="flex gap-2">
+                  <input
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    type={showApiKey ? "text" : "password"}
+                    placeholder="Paste API key here"
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey((value) => !value)}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-white dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
+                  >
+                    {showApiKey ? "Hide" : "Show"}
+                  </button>
+                </div>
+
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {editingLlmId
+                    ? "You are editing the saved API key. Changing this field will replace the saved key."
+                    : "The API key is saved for server-side evaluation only. Students and coaches should not see it."}
+                </p>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={setAsActive}
+                  onChange={(event) => setSetAsActive(event.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                Set as active provider
+              </label>
+            </div>
+
+            <div className="mt-5 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSaveLlmSetting}
+                disabled={savingLlmSetting}
+                className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingLlmSetting
+                  ? "Saving..."
+                  : editingLlmId
+                    ? "Update LLM Setting"
+                    : "Save LLM Setting"}
+              </button>
+
+              <button
+                type="button"
+                onClick={resetLlmForm}
+                disabled={savingLlmSetting}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-6">
+          <h2 className="text-base font-semibold text-gray-800 dark:text-white/90">
+            Saved Providers
+          </h2>
+
+          {loadingLlmSettings ? (
+            <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
+              Loading LLM settings...
+            </p>
+          ) : llmSettings.length === 0 ? (
+            <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
+              No LLM settings saved yet.
+            </p>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {llmSettings.map((setting) => (
+                <div
+                  key={setting.id}
+                  className={`rounded-lg border-2 p-4 transition ${setting.is_active
+                    ? "border-brand-500 bg-brand-50 dark:border-brand-500 dark:bg-brand-500/10"
+                    : "border-gray-300 bg-white dark:border-gray-700 dark:bg-gray-800"
+                    }`}
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div>
+                          <p className="font-medium text-gray-800 dark:text-white/90">
+                            {setting.setting_name || setting.provider_name}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {setting.provider_name}
+                          </p>
+                        </div>
+
+                        {setting.is_active ? (
+                          <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 dark:bg-green-500/20 dark:text-green-400">
+                            Active
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                        Model: <span className="font-mono">{setting.model_name}</span>
+                      </p>
+
+                      <p className="mt-1 break-all text-xs text-gray-600 dark:text-gray-400">
+                        Base URL: <span className="font-mono">{setting.base_url}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {!setting.is_active ? (
+                        <button
+                          type="button"
+                          onClick={() => handleActivateLlmSetting(setting.id)}
+                          disabled={savingLlmSetting}
+                          className="rounded-lg border border-brand-500 px-4 py-2 text-sm font-semibold text-brand-600 transition hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-brand-500/10"
+                        >
+                          Set Active
+                        </button>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        onClick={() => handleEditLlmSetting(setting)}
+                        disabled={savingLlmSetting}
+                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
+                      >
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLlmSetting(setting.id)}
+                        disabled={savingLlmSetting}
+                        className="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-500/10"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -436,11 +971,10 @@ export default function AdminDashboardPage() {
                     key={page}
                     type="button"
                     onClick={() => setCurrentPage(page)}
-                    className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
-                      safePage === page
-                        ? "bg-brand-500 text-white"
-                        : "border border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
-                    }`}
+                    className={`rounded-lg px-3 py-2 text-sm font-medium transition ${safePage === page
+                      ? "bg-brand-500 text-white"
+                      : "border border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.03]"
+                      }`}
                   >
                     {page}
                   </button>

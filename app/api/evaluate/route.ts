@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 
 type EvaluateRequestBody = {
   transcript?: string;
@@ -59,7 +59,7 @@ function analyzeTranscript(transcript: string) {
   const advancedConnectors = ["however", "therefore", "nevertheless", "consequently", "furthermore", "on the other hand", "although", "whereas"].reduce(
     (count, w) => count + ((joined.match(new RegExp(`\\b${w}\\b`, "g")) || []).length), 0
   );
-  
+
   const simpleConnectors = ["and", "but", "because", "so", "then"].reduce(
     (count, w) => count + ((joined.match(new RegExp(`\\b${w}\\b`, "g")) || []).length), 0
   );
@@ -121,7 +121,7 @@ function calculateScore(transcript: string): ScoreData {
   // =========================================================
   // LOGIKA PENILAIAN BERDASARKAN KRITERIA INDIKATOR IELTS
   // =========================================================
-  
+
   let fluency = 3.0;
   let lexical = 3.0;
   let grammar = 3.0;
@@ -210,8 +210,8 @@ function calculateScore(transcript: string): ScoreData {
       { id: "grammar", label: "Grammar Range & Accuracy", score: clampBand(grammar).toFixed(1), text: getMetricText("grammar", grammar) },
       { id: "pronunciation", label: "Pronunciation", score: clampBand(pronunciation).toFixed(1), text: getMetricText("pronunciation", pronunciation) }
     ],
-    recommendation: overall >= 7.0 
-      ? "Luar biasa! Pertahankan penggunaan struktur kompleks ini dan tingkatkan variasi ekspresi idiomatik tingkat lanjut." 
+    recommendation: overall >= 7.0
+      ? "Luar biasa! Pertahankan penggunaan struktur kompleks ini dan tingkatkan variasi ekspresi idiomatik tingkat lanjut."
       : "Untuk menaikkan band, fokuslah pada penggunaan kata penghubung transisi (seperti 'however', 'consequently') dan hindari mengulang kata yang sama.",
     analysis: ""
   };
@@ -234,40 +234,104 @@ function buildAiPrompt(input: EvaluateRequestBody & { rubricItems: string[]; sco
   ].join("\n");
 }
 
+type LlmSetting = {
+  provider_name: string;
+  base_url: string;
+  api_key: string;
+  model_name: string;
+};
+
+async function getActiveLlmSetting(): Promise<LlmSetting | null> {
+  const { data, error } = await supabaseAdmin
+    .from("llm_settings")
+    .select("provider_name, base_url, api_key, model_name")
+    .eq("is_active", true)
+    .maybeSingle();
+
+  console.log("[evaluate] raw llm setting data:", data);
+  console.log("[evaluate] raw llm setting error:", error);
+
+  if (error) {
+    console.error("[evaluate] failed to load llm setting", error);
+    return null;
+  }
+
+  return data as LlmSetting | null;
+}
+
+async function callOpenAiCompatibleLlm({
+  setting,
+  model,
+  temperature,
+  messages,
+}: {
+  setting: LlmSetting;
+  model: string;
+  temperature: number;
+  messages: { role: "system" | "user" | "assistant"; content: string }[];
+}) {
+  const response = await fetch(setting.base_url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${setting.api_key}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature,
+      messages,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.error?.message || "LLM provider request failed.");
+  }
+
+  return data?.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as EvaluateRequestBody;
     const transcript = (body.transcript || "").trim();
     const rubricItems = (body.rubricItems || []).map((item) => item.trim()).filter(Boolean);
-    
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
+
+    const llmSetting = await getActiveLlmSetting();
+
+    if (!llmSetting?.api_key || !llmSetting?.base_url || !llmSetting?.model_name) {
       const score = calculateScore(transcript);
-      return NextResponse.json({ ...score, analysis: "Analisis AI tidak tersedia karena API Key kosong." });
+
+      return NextResponse.json({
+        ...score,
+        analysis: "Analisis AI tidak tersedia karena belum ada LLM API aktif di Admin Dashboard.",
+      });
     }
 
-    const groq = new Groq({ apiKey });
-    const model = process.env.GROQ_CHAT_MODEL || "llama-3.3-70b-versatile";
+    const model = llmSetting.model_name;
 
     // =========================================================
     // 🛠️ LANGKAH 1: AI SANITY CHECK (Mikir apakah transkripnya nyambung/valid)
     // =========================================================
-    const sanityCheckCompletion = await groq.chat.completions.create({
-      model,
-      temperature: 0.1, // Dibuat sekaku mungkin agar akurat
-      messages: [
-        {
-          role: "system",
-          content: "You are a strict data validation assistant. Analyze the user's English speaking transcript. Determine if the text consists of valid English attempts to communicate, or if it is completely invalid spam/nonsense/trolling (e.g., repeating the same sound like 'meow meow', 'woof woof', single characters like 'aaaaa', or completely random gibberish). Respond with EXACTLY one word: 'VALID' or 'INVALID'."
-        },
-        {
-          role: "user",
-          content: `Transcript to analyze: "${transcript}"`
-        }
-      ]
-    });
-
-    const sanityResult = sanityCheckCompletion.choices?.[0]?.message?.content?.trim().toUpperCase();
+    const sanityResult = (
+      await callOpenAiCompatibleLlm({
+        setting: llmSetting,
+        model,
+        temperature: 0.1,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a strict data validation assistant. Analyze the user's English speaking transcript. Determine if the text consists of valid English attempts to communicate, or if it is completely invalid spam/nonsense/trolling (e.g., repeating the same sound like 'meow meow', 'woof woof', single characters like 'aaaaa', or completely random gibberish). Respond with EXACTLY one word: 'VALID' or 'INVALID'.",
+          },
+          {
+            role: "user",
+            content: `Transcript to analyze: "${transcript}"`,
+          },
+        ],
+      })
+    ).trim().toUpperCase();
 
     // 🛠️ LANGKAH 2: JIKA AI MENILAI JAWABAN ADALAH SAMPAH / 'INVALID'
     if (sanityResult === "INVALID") {
@@ -291,16 +355,22 @@ export async function POST(req: NextRequest) {
     const score = calculateScore(transcript);
     const prompt = buildAiPrompt({ ...body, transcript, rubricItems, score });
 
-    const completion = await groq.chat.completions.create({
+    const aiText = await callOpenAiCompatibleLlm({
+      setting: llmSetting,
       model,
       temperature: 0.3,
       messages: [
-        { role: "system", content: "You provide official, professional, and constructive IELTS speaking feedback in Indonesian." },
-        { role: "user", content: prompt }
-      ]
+        {
+          role: "system",
+          content:
+            "You provide official, professional, and constructive IELTS speaking feedback in Indonesian.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
     });
-
-    const aiText = completion.choices?.[0]?.message?.content?.trim();
 
     return NextResponse.json({
       ...score,
