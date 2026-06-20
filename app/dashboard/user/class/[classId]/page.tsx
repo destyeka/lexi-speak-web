@@ -392,16 +392,16 @@ export default function StudentClassAssignmentPage() {
                 ? isCompletedSubmission
                   ? "Completed"
                   : submission.status === "in_progress"
-                  ? "In progress"
-                  : "Pending"
+                    ? "In progress"
+                    : "Pending"
                 : "Not started";
               const statusColor = isExpired
                 ? "text-rose-700 bg-rose-100 border-rose-200"
                 : statusLabel === "Completed"
-                ? "text-emerald-700 bg-emerald-100 border-emerald-200"
-                : statusLabel === "In progress"
-                ? "text-sky-700 bg-sky-100 border-sky-200"
-                : "text-slate-700 bg-slate-100 border-slate-200";
+                  ? "text-emerald-700 bg-emerald-100 border-emerald-200"
+                  : statusLabel === "In progress"
+                    ? "text-sky-700 bg-sky-100 border-sky-200"
+                    : "text-slate-700 bg-slate-100 border-slate-200";
 
               return (
                 <div key={assignment.id} className="rounded-[24px] border border-gray-200 bg-white p-6 shadow-[0_12px_35px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:border-primary/40 hover:shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
@@ -440,24 +440,24 @@ export default function StudentClassAssignmentPage() {
                           <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Submitted</p>
                           <p className="mt-2 font-medium text-slate-900">{formatDate(submission.submitted_at)}</p>
                         </div>
-  {submission.score !== null && (
-  <div className="text-right flex items-center gap-3">
-    <span className="inline-block rounded-xl bg-brand-50 px-3 py-1 text-sm font-bold text-brand-600 border border-brand-100">
-      Band {submission.score}
-    </span>
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        // ✅ UBAH DISINI: Arahkan ke rute detail dashboard yang sudah diperbaiki kodenya
-        window.open(`/learn/result?assignmentId=${submission.assignment_id}`, '_blank');
-      }}
-      className="rounded-lg bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-    >
-      Detail
-    </button>
-  </div>
-)}
+                        {submission.score !== null && (
+                          <div className="text-right flex items-center gap-3">
+                            <span className="inline-block rounded-xl bg-brand-50 px-3 py-1 text-sm font-bold text-brand-600 border border-brand-100">
+                              Band {submission.score}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // ✅ UBAH DISINI: Arahkan ke rute detail dashboard yang sudah diperbaiki kodenya
+                                window.open(`/learn/result?assignmentId=${submission.assignment_id}`, '_blank');
+                              }}
+                              className="rounded-lg bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                              Detail
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : null}
@@ -467,10 +467,10 @@ export default function StudentClassAssignmentPage() {
                       {isExpired
                         ? "Assignment sudah lewat tenggat waktu."
                         : isLocked
-                        ? `Assignment akan tersedia mulai ${formatDate(assignment.start_at)}.`
-                        : submission?.status === "submitted"
-                        ? "Assignment sudah selesai dan tidak bisa dikerjakan ulang."
-                        : "Klik untuk mulai atau lanjutkan tugas."}
+                          ? `Assignment akan tersedia mulai ${formatDate(assignment.start_at)}.`
+                          : submission?.status === "submitted"
+                            ? "Assignment sudah selesai dan tidak bisa dikerjakan ulang."
+                            : "Klik untuk mulai atau lanjutkan tugas."}
                     </p>
                     <div className="flex flex-wrap gap-3">
                       {isCompletedSubmission ? (
@@ -500,10 +500,9 @@ export default function StudentClassAssignmentPage() {
                         }}
                         disabled={isExpired || isLocked || submission?.status === "submitted" || submission?.status === "complete"}
                         className={
-                          `inline-flex items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold transition ${
-                            submission?.status === "submitted"
-                              ? "bg-slate-200 text-slate-900 cursor-not-allowed"
-                              : isExpired || isLocked
+                          `inline-flex items-center justify-center rounded-2xl px-4 py-2 text-sm font-semibold transition ${submission?.status === "submitted"
+                            ? "bg-slate-200 text-slate-900 cursor-not-allowed"
+                            : isExpired || isLocked
                               ? "bg-slate-300 text-slate-600 cursor-not-allowed"
                               : "bg-primary text-white hover:bg-primary/90"
                           }`
@@ -546,7 +545,10 @@ export default function StudentClassAssignmentPage() {
               <p className="font-medium text-slate-900">Rincian sertifikat</p>
               <p>{selectedAssignment?.title || "-"}</p>
               <p>Band: {selectedSubmission?.score?.toFixed(1) ?? "-"}</p>
-              <p>Tanggal selesai: {formatCompletionDate(selectedSubmission?.submitted_at)}</p>
+              <p>
+                Tanggal selesai:{" "}
+                {formatCompletionDate(selectedSubmission?.submitted_at ?? null)}
+              </p>
             </div>
             {certificateError ? <p className="text-sm text-rose-600">{certificateError}</p> : null}
 
